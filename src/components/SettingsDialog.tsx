@@ -1,5 +1,6 @@
 import {
   CircleAlert,
+  CircleArrowUp,
   CircleCheck,
   Eye,
   EyeOff,
@@ -8,6 +9,7 @@ import {
   Monitor,
   Moon,
   PlugZap,
+  RefreshCw,
   RotateCcw,
   Search,
   Settings as SettingsIcon,
@@ -16,7 +18,7 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -40,9 +42,10 @@ import {
 } from '@/lib/preferences'
 import { switchTheme } from '@/lib/theme'
 import { IS_TAURI } from '@/lib/transport'
+import { CAN_UPDATE, checkForUpdates, startUpdate, useUpdates } from '@/lib/updates'
 import { cn } from '@/lib/utils'
 
-export type SettingsTab = 'general' | 'model' | 'connection'
+export type SettingsTab = 'general' | 'model' | 'connection' | 'updates'
 
 interface Props {
   open: boolean
@@ -70,6 +73,10 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; 
     keywords: 'prompt système instructions température top p max tokens échantillonnage historique mémoire messages',
   },
   { id: 'connection', label: 'Connexion', icon: PlugZap, group: 'FreeLLMAPI', keywords: 'clé api port freellmapi tester statistiques' },
+  // Mises à jour : seulement dans l'appli (elles reconstruisent l'appli depuis le repo git).
+  ...(IS_TAURI
+    ? [{ id: 'updates' as const, label: 'Mises à jour', icon: CircleArrowUp, group: 'Application', keywords: 'mise à jour version git github installer redémarrer nouveautés' }]
+    : []),
 ]
 
 export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSaved }: Props) {
@@ -148,6 +155,7 @@ export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSa
               {current.id === 'model' && <ModelPage />}
               {/* Recréée à chaque ouverture : la clé tapée ne reste jamais en mémoire. */}
               {current.id === 'connection' && <ConnectionPage settings={settings} onSaved={onSaved} />}
+              {current.id === 'updates' && <UpdatesPage />}
             </Appear>
           </div>
         </div>
@@ -639,6 +647,122 @@ function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSa
         />
       </Group>
     </form>
+  )
+}
+
+// --- Mises à jour -------------------------------------------------------------------------
+
+function UpdatesPage() {
+  const { status, checking, checkError, lastChecked, running, step, runError } = useUpdates()
+
+  // À l'ouverture de la page : on revérifie, sauf si on vient de le faire.
+  useEffect(() => {
+    if (!lastChecked || Date.now() - lastChecked > 60_000) void checkForUpdates()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const installed = status ? (
+    status.installed ? (
+      <>
+        Commit <code className="font-mono text-xs">{status.installed}</code>
+      </>
+    ) : (
+      'Inconnue : l’appli n’a pas été installée avec npm run app:install.'
+    )
+  ) : checking ? (
+    'Vérification…'
+  ) : (
+    'Pas encore vérifiée.'
+  )
+
+  const n = status?.commits.length ?? 0
+  const summary = !status
+    ? null
+    : !status.available
+      ? 'Tout est à jour.'
+      : n > 0
+        ? `${n} nouveauté${n > 1 ? 's' : ''} depuis ta version.`
+        : `Une nouvelle version (commit ${status.latest}) peut être construite.`
+
+  return (
+    <>
+      <Group title="Mises à jour">
+        <Row
+          label="Version installée"
+          description={installed}
+          control={
+            <Button variant="outline" className="h-9 px-3" onClick={() => void checkForUpdates()} disabled={checking || running}>
+              <RefreshCw className={cn(checking && 'animate-spin')} aria-hidden />
+              Vérifier
+            </Button>
+          }
+        />
+        {status && (
+          <Row
+            label={status.available ? 'Mise à jour disponible' : 'État'}
+            description={summary}
+            control={
+              running ? (
+                <span role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden />
+                  {step ?? 'Mise à jour'}…
+                </span>
+              ) : status.available ? (
+                <Button className="h-9 px-4" onClick={() => void startUpdate()} disabled={!CAN_UPDATE || status.blocked !== null}>
+                  Mettre à jour
+                </Button>
+              ) : undefined
+            }
+          >
+            {n > 0 && (
+              <ul className="max-h-56 overflow-y-auto rounded-lg bg-muted/50 p-2 text-sm">
+                {status.commits.map((c) => (
+                  <li key={c.hash} className="flex gap-3 rounded-md px-2 py-1.5">
+                    <code className="shrink-0 font-mono text-xs leading-5 text-muted-foreground">{c.hash}</code>
+                    <span className="min-w-0">{c.summary}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Row>
+        )}
+        <Row
+          label="Comment ça marche"
+          description="L’appli compare sa version avec ton repo git et avec GitHub, au lancement puis toutes les 6 heures. « Mettre à jour » récupère les nouveautés (git pull), reconstruit l’appli puis la relance. Tes conversations et ta clé sont conservées."
+        />
+      </Group>
+
+      {running && (
+        <Notice tone="warning" icon={Info}>
+          Ça prend en général une à deux minutes, puis l’appli redémarre toute seule. Une réponse en cours d’écriture à ce
+          moment-là serait coupée.
+        </Notice>
+      )}
+      {!CAN_UPDATE && (
+        <Notice tone="warning" icon={Info}>
+          En mode dev (npm run app:dev), le bouton est désactivé : il sert à l’appli installée dans Applications.
+        </Notice>
+      )}
+      {status?.blocked && (
+        <Notice tone="warning" icon={Info}>
+          {status.blocked}
+        </Notice>
+      )}
+      {status?.warnings.map((w) => (
+        <Notice key={w} tone="warning" icon={Info}>
+          {w}
+        </Notice>
+      ))}
+      {checkError && (
+        <Notice tone="error" icon={CircleAlert}>
+          Vérification impossible : {checkError}
+        </Notice>
+      )}
+      {runError && (
+        <Notice tone="error" icon={CircleAlert}>
+          <span className="block font-mono text-xs break-words whitespace-pre-wrap">{runError}</span>
+        </Notice>
+      )}
+    </>
   )
 }
 

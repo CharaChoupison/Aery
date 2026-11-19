@@ -17,6 +17,7 @@ import { ModelsPage } from '@/pages/ModelsPage'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { hasCustomModelSettings, usePreferences } from '@/lib/preferences'
 import { useTheme } from '@/lib/theme'
+import { startUpdateChecks } from '@/lib/updates'
 import { cn } from '@/lib/utils'
 
 /** Largeur de la barre latérale sur grand écran (w-64). */
@@ -57,6 +58,7 @@ export default function App() {
         if (!s.hasKey) openSettings('connection')
       })
       .catch((e) => setSettingsError(e instanceof ApiError ? e.message : 'Impossible de lire les réglages.'))
+    startUpdateChecks() // appli installée seulement : y a-t-il une nouvelle version dans le repo git ?
   }, [])
 
   const sidebarProps = {
@@ -85,6 +87,10 @@ export default function App() {
     onOpenSettings: () => {
       setMobileSidebarOpen(false)
       openSettings(settingsTab)
+    },
+    onOpenUpdates: () => {
+      setMobileSidebarOpen(false)
+      openSettings('updates')
     },
   }
 

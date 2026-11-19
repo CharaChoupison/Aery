@@ -1,11 +1,13 @@
 //! Partie native de l'appli (Rust). Elle remplace le plugin Vite de la version web :
 //!  - settings : clé FreeLLMAPI dans le Trousseau macOS + port ;
 //!  - proxy    : relais en streaming vers FreeLLMAPI, qui ajoute la clé ;
-//!  - admin    : statistiques FreeLLMAPI en lecture seule (analytique, journaux, modèles).
+//!  - admin    : statistiques FreeLLMAPI en lecture seule (analytique, journaux, modèles) ;
+//!  - updates  : mise à jour de l'appli depuis le repo git du projet.
 
 mod admin;
 mod proxy;
 mod settings;
+mod updates;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +19,8 @@ pub fn run() {
             settings::save_settings,
             proxy::proxy_request,
             proxy::cancel_request,
+            updates::check_updates,
+            updates::run_update,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'appli");

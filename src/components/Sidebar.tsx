@@ -1,6 +1,7 @@
 import {
   Boxes,
   ChartColumn,
+  CircleArrowUp,
   CircleAlert,
   LoaderCircle,
   MessageSquare,
@@ -30,6 +31,8 @@ import { IconButton } from '@/components/IconButton'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import type { Conversation } from '@/hooks/useChat'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
+import { useUpdates } from '@/lib/updates'
+import { Appear } from '@/components/Appear'
 
 interface Props {
   conversations: Conversation[]
@@ -42,6 +45,8 @@ interface Props {
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
   onOpenSettings: () => void
+  /** Ouvre les Paramètres sur la page « Mises à jour ». */
+  onOpenUpdates: () => void
   /** Page affichée (chat, Modèles, Analytique) et navigation entre elles. */
   view: View
   onNavigate: (view: View) => void
@@ -77,7 +82,8 @@ function groupByDate(conversations: Conversation[]): { label: string; items: Con
 // --- La barre latérale ---------------------------------------------------------------
 
 export function Sidebar(props: Props) {
-  const { conversations, loaded, storageError, onNew, onOpenSettings, onCollapse, onDelete, view, onNavigate } = props
+  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, view, onNavigate } = props
+  const updates = useUpdates()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const motion = useMotion()
   const navRef = useRef<HTMLElement>(null)
@@ -162,6 +168,20 @@ export function Sidebar(props: Props) {
           ))
         )}
       </nav>
+
+      {/* Une nouvelle version de l'appli est prête (vérifiée au lancement puis toutes les 6 h). */}
+      {updates.status?.available && (
+        <Appear from={{ autoAlpha: 0, y: 8 }} className="border-t border-sidebar-border p-2">
+          <Button variant="ghost" className="h-9 w-full justify-start gap-2 px-2 text-primary hover:text-primary" onClick={onOpenUpdates}>
+            {updates.running ? (
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <CircleArrowUp className="size-4" aria-hidden />
+            )}
+            {updates.running ? 'Mise à jour en cours…' : 'Mise à jour disponible'}
+          </Button>
+        </Appear>
+      )}
 
       <div className="flex items-center gap-1 border-t border-sidebar-border p-2">
         <Button variant="ghost" className="h-9 flex-1 justify-start gap-2 px-2" onClick={onOpenSettings}>
