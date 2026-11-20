@@ -83,7 +83,10 @@ export function parseCommand(text: string): ParsedCommand | null {
 export function matchCommands(commands: SlashCommand[], query: string): SlashCommand[] {
   const q = query.toLowerCase()
   const starts = commands.filter((c) => c.name.startsWith(q))
-  const contains = commands.filter((c) => !c.name.startsWith(q) && (c.name.includes(q) || c.description.toLowerCase().includes(q)))
+  // Recherche dans les descriptions à partir de 3 lettres (avant, trop de bruit : « ma » → « consommation »).
+  const contains = commands.filter(
+    (c) => !c.name.startsWith(q) && (c.name.includes(q) || (q.length >= 3 && c.description.toLowerCase().includes(q))),
+  )
   return [...starts, ...contains]
 }
 

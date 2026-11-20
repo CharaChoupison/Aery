@@ -16,7 +16,9 @@ import { useModels } from '@/hooks/useModels'
 import { useModelCapabilities } from '@/hooks/useModelCapabilities'
 import { useProjects } from '@/hooks/useProjects'
 import { useSlashCommands } from '@/hooks/useSlashCommands'
-import { conversationSpace, projectSpace, type Project, type Space } from '@/lib/projects'
+import { conversationSpace, filesChars, PROJECT_LIMITS, projectSpace, type Project, type Space } from '@/lib/projects'
+import type { Attachment } from '@/lib/attachments'
+import { ProjectSources } from '@/components/ProjectSources'
 import { folderName, pickWorkspace, releaseWorkspace } from '@/lib/agent/tools'
 import { IS_TAURI } from '@/lib/transport'
 import { ProjectDialog } from '@/components/ProjectDialog'
@@ -180,6 +182,17 @@ export default function App() {
       projects.projects.some((p) => p.id !== exceptId && p.workspace === workspace) ||
       chat.conversations.some((c) => c.folder === workspace) // dossier joint à une conversation du Chat
     if (workspace && !used) void releaseWorkspace(workspace)
+  }
+
+  /** Sources du projet › « Ajouter au projet » : le document devient un fichier de référence (mêmes limites que dans la fenêtre du projet). */
+  function addProjectFile(project: Project, file: Attachment): string | null {
+    if (file.kind !== 'text' || !file.text) return 'Seuls les fichiers texte peuvent être ajoutés au projet.'
+    if (project.files.length >= PROJECT_LIMITS.files) return `${PROJECT_LIMITS.files} fichiers maximum par projet.`
+    if (filesChars(project.files) + file.text.length > PROJECT_LIMITS.filesChars) {
+      return `« ${file.name} » ne rentre pas : les fichiers du projet sont limités à ${PROJECT_LIMITS.filesChars.toLocaleString('fr-FR')} caractères.`
+    }
+    projects.updateProject(project.id, { files: [...project.files, { ...file, id: crypto.randomUUID() }] })
+    return null
   }
 
   const sidebarProps = {
@@ -383,6 +396,7 @@ export default function App() {
               widthClass={widthClass}
               onEdit={() => setProjectDialog({ id: activeProject.id })}
               onSelect={chat.selectConversation}
+              onAddFile={(file) => addProjectFile(activeProject, file)}
             />
           ) : isEmpty && space === 'code' ? (
             // Accueil de l'espace Code : choisir (ou ajouter) le projet sur lequel on travaille.
@@ -478,6 +492,7 @@ function ProjectHome({
   widthClass,
   onEdit,
   onSelect,
+  onAddFile,
 }: {
   project: Project
   conversations: Conversation[]
@@ -485,6 +500,7 @@ function ProjectHome({
   widthClass: string
   onEdit: () => void
   onSelect: (id: string) => void
+  onAddFile: (file: Attachment) => string | null
 }) {
   const code = projectSpace(project) === 'code'
   const details = [
@@ -528,6 +544,7 @@ function ProjectHome({
             </ul>
           </section>
         )}
+        <ProjectSources project={project} conversations={conversations} onSelect={onSelect} onAddFile={onAddFile} />
       </Appear>
     </div>
   )

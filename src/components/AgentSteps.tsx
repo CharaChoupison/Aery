@@ -3,6 +3,7 @@ import { useState, type ComponentType } from 'react'
 import { Appear } from '@/components/Appear'
 import type { AgentStep } from '@/lib/agent/loop'
 import { parseArgs } from '@/lib/agent/tools'
+import { hostOf } from '@/lib/projectSources'
 import { splitThinking } from '@/lib/thinking'
 import { cn } from '@/lib/utils'
 
@@ -98,14 +99,6 @@ function SourceList({ sources }: { sources: NonNullable<(AgentStep & { type: 'to
       ))}
     </ul>
   )
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return ''
-  }
 }
 
 function Details({ title, text, error = false }: { title: string; text: string; error?: boolean }) {
