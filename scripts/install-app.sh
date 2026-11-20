@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Construit FreeLLM Chat et remplace la version installée dans /Applications.
+# Construit Aery et remplace la version installée dans /Applications.
 #
 #   npm run app:install         construit, ferme l'appli, installe, relance
 #
@@ -11,10 +11,13 @@
 # L'historique (IndexedDB), la clé (Trousseau) et le port sont stockés hors du .app : rien n'est perdu.
 set -euo pipefail
 
-APP_NAME="FreeLLM Chat"
+APP_NAME="Aery"
+# Ancien nom de l'appli : sa version installée est fermée puis supprimée (sinon deux applis cohabitent).
+OLD_APP_NAME="FreeLLM Chat"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILT="$ROOT/src-tauri/target/release/bundle/macos/$APP_NAME.app"
 DEST="/Applications/$APP_NAME.app"
+OLD_DEST="/Applications/$OLD_APP_NAME.app"
 
 PULL=0
 BUILD=1
@@ -97,10 +100,11 @@ if [ "$INSTALL" = 1 ]; then
     fi
   else
     # Le processus s'appelle "freellm-chat" (nom du binaire) : on le repère par son chemin.
-    is_running() { pgrep -qf "$DEST/Contents/MacOS/"; }
+    is_running() { pgrep -qf "$DEST/Contents/MacOS/" || pgrep -qf "$OLD_DEST/Contents/MacOS/"; }
     if is_running; then
       echo "==> Fermeture de $APP_NAME"
-      osascript -e "quit app \"$APP_NAME\"" || true
+      osascript -e "quit app \"$APP_NAME\"" 2>/dev/null || true
+      osascript -e "quit app \"$OLD_APP_NAME\"" 2>/dev/null || true
       for _ in $(seq 1 20); do
         is_running || break
         sleep 0.5
@@ -118,6 +122,10 @@ if [ "$INSTALL" = 1 ]; then
   ditto "$BUILT" "$DEST.new"
   rm -rf "$DEST"
   mv "$DEST.new" "$DEST"
+  if [ -d "$OLD_DEST" ]; then
+    echo "==> Suppression de l'ancienne version ($OLD_APP_NAME)"
+    rm -rf "$OLD_DEST"
+  fi
 
   echo "==> Lancement"
   open "$DEST"

@@ -1,4 +1,5 @@
-import { MessageSquare, PanelLeft, SlidersHorizontal, SquarePen } from 'lucide-react'
+import { PanelLeft, SlidersHorizontal, SquarePen } from 'lucide-react'
+import { AeryLogo } from '@/components/AeryLogo'
 import { useEffect, useRef, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { Composer } from '@/components/Composer'
@@ -211,7 +212,7 @@ export default function App() {
               className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-[10vh]"
             >
               <span className="flex size-12 items-center justify-center rounded-2xl bg-muted">
-                <MessageSquare className="size-6" aria-hidden />
+                <AeryLogo className="size-6" aria-hidden />
               </span>
               <h2 className="text-center text-2xl font-semibold sm:text-3xl">Comment je peux t’aider ?</h2>
               <div className={cn('w-full', widthClass)}>{composer}</div>

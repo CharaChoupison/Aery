@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src-tauri/app-icon.png" width="128" alt="Logo d'Aery" />
+</p>
+
 # Aery
 
 Une interface de chat façon ChatGPT pour [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi), le proxy compatible OpenAI qui regroupe les quotas gratuits de nombreux fournisseurs de LLM derrière un seul endpoint `/v1`.

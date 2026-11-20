@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "FreeLLM Chat",
+  "productName": "Aery",
   "version": "0.1.0",
   "identifier": "com.freellmchat.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "FreeLLM Chat",
+        "title": "Aery",
         "width": 1100,
         "height": 760,
         "minWidth": 380,

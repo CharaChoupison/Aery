@@ -4,7 +4,6 @@ import {
   CircleArrowUp,
   CircleAlert,
   LoaderCircle,
-  MessageSquare,
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
@@ -13,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { View } from '@/App'
+import { AeryLogo } from '@/components/AeryLogo'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
@@ -103,8 +103,8 @@ export function Sidebar(props: Props) {
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex h-14 items-center justify-between px-3">
         <span className="flex items-center gap-2 font-semibold">
-          <MessageSquare className="size-5" aria-hidden />
-          FreeLLM Chat
+          <AeryLogo className="size-5" aria-hidden />
+          Aery
         </span>
         {onCollapse && (
           <IconButton label="Masquer la barre latérale" onClick={onCollapse}>
