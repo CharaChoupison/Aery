@@ -71,6 +71,16 @@ if [ "$BUILD" = 1 ]; then
     FREELLM_BUILD_TREE="$(git rev-parse "${STASH:-HEAD}^{tree}")"
     export FREELLM_BUILD_COMMIT FREELLM_BUILD_TREE
   fi
+  # Signature avec un certificat perso stable (« Aery Dev », créé dans Trousseaux d'accès).
+  # Sans lui, la signature est « ad-hoc » : elle change à chaque build et le Trousseau
+  # redemande l'autorisation de lire la clé à chaque fois.
+  SIGNING_IDENTITY="${AERY_SIGNING_IDENTITY:-Aery Dev}"
+  if security find-identity -p codesigning 2>/dev/null | grep -qF "\"$SIGNING_IDENTITY\""; then
+    export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+    echo "==> Signature avec le certificat « $SIGNING_IDENTITY »"
+  else
+    echo "Note : certificat « $SIGNING_IDENTITY » introuvable, signature ad-hoc (le Trousseau redemandera l'accès à la clé)."
+  fi
   echo "==> Construction de l'appli"
   npx tauri build --bundles app
   if [ ! -d "$BUILT" ]; then
