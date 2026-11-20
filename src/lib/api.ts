@@ -187,6 +187,78 @@ export async function listModels(): Promise<ModelInfo[]> {
     }))
 }
 
+// --- Recherche web ---------------------------------------------------------------
+// FreeLLMAPI regroupe aussi des moteurs de recherche (Tavily, Brave, Exa, Parallel…) derrière
+// POST /v1/search, avec la même clé freellmapi- et le même système de repli que pour les modèles.
+
+export interface SearchHit {
+  title: string
+  url: string
+  /** Extrait de la page (quelques centaines de caractères). */
+  content: string
+}
+
+export interface SearchResult {
+  query: string
+  results: SearchHit[]
+  /** Moteur qui a répondu (ex. « tavily »). */
+  provider?: string
+}
+
+export interface SearchEngine {
+  id: string
+  /** Fournisseur (= platform de la page Clés : « tavily », « exa »…). */
+  provider: string
+  name: string
+  /** Au moins une clé utilisable. */
+  available: boolean
+}
+
+/**
+ * Moteurs de recherche ACTIFS dans le catalogue de FreeLLMAPI. Un fournisseur de recherche absent
+ * de cette liste (pas encore au catalogue, ou éteint) n'utiliserait pas la clé qu'on lui ajoute.
+ */
+export async function listSearchEngines(signal?: AbortSignal): Promise<SearchEngine[]> {
+  const data = await request<{ data?: SearchEngine[] }>('/v1/search/engines', { signal })
+  return Array.isArray(data.data) ? data.data : []
+}
+
+/** Lance une recherche web. Lève une ApiError au message lisible si aucun moteur n'est prêt. */
+export async function webSearch(
+  query: string,
+  { topic = 'general', signal }: { topic?: 'general' | 'news'; signal?: AbortSignal } = {},
+): Promise<SearchResult> {
+  try {
+    const data = await request<{ query?: string; results?: unknown; provider?: string }>('/v1/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, topic, max_results: 5 }),
+      signal,
+    })
+    // On ne garde que des résultats bien formés (titre et URL http(s)).
+    const results = (Array.isArray(data.results) ? data.results : [])
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+      .map((r) => ({
+        title: typeof r.title === 'string' ? r.title.slice(0, 300) : '',
+        url: typeof r.url === 'string' ? r.url : '',
+        content: typeof r.content === 'string' ? r.content : '',
+      }))
+      .filter((r) => /^https?:\/\//i.test(r.url))
+    return { query: data.query ?? query, results, provider: data.provider }
+  } catch (e) {
+    if (e instanceof ApiError && e.code === 'no_search_keys') {
+      throw new ApiError(
+        e.status,
+        'Aucun moteur de recherche n’est prêt dans FreeLLMAPI. Ajoute-en un dans Paramètres › Clés des fournisseurs (groupe « Recherche web » : Tavily, Exa…, ou Parallel sans clé).',
+        e.code,
+      )
+    }
+    if (e instanceof ApiError && e.status === 429) {
+      throw new ApiError(429, 'Limite des moteurs de recherche atteinte. Réessaie plus tard.', e.code)
+    }
+    throw e
+  }
+}
+
 /** Nombre de messages envoyés par défaut : les modèles gratuits ont souvent un petit contexte. */
 export const MAX_HISTORY = 20
 

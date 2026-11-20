@@ -10,8 +10,8 @@
  * au message suivant, le modèle ne reçoit que les réponses finales. Ça économise le contexte.
  */
 
-import { isAbortError, streamChat, type ChatMessage, type ChatOptions, type RawMessage, type ToolCall } from '@/lib/api'
-import { agentTools, describeTool, executeTool, type AgentSettings } from './tools'
+import { ApiError, isAbortError, streamChat, type ChatMessage, type ChatOptions, type RawMessage, type ToolCall } from '@/lib/api'
+import { agentTools, describeTool, executeTool, MAX_WEB_SEARCHES, type AgentSettings, type Source } from './tools'
 
 export const MAX_ROUNDS = 12
 /** Taille max d'un résultat d'outil renvoyé au modèle (les petits contextes saturent vite). */
@@ -29,6 +29,8 @@ export type AgentStep =
       label: string
       status: 'running' | 'done' | 'error'
       result?: string
+      /** web_search : les pages trouvées (liens affichés sous l'étape). */
+      sources?: Source[]
       durationMs?: number
     }
 
@@ -51,6 +53,10 @@ export async function* runAgent(
   const tools = agentTools(options.agent)
   const extra: RawMessage[] = [] // les tours d'outils de CE message
   const steps: AgentStep[] = []
+  let webSearches = 0
+  // Recherche web indisponible (limite des moteurs, aucun moteur prêt) : inutile de réessayer
+  // pendant cette réponse, on renvoie directement l'erreur au modèle.
+  let searchDown: string | null = null
   // Copie : React compare les références, chaque état envoyé doit être un nouvel objet.
   const snapshot = (content: string): AgentEvent => ({ type: 'state', steps: steps.map((s) => ({ ...s })), content })
 
@@ -102,7 +108,22 @@ export async function* runAgent(
       const started = performance.now()
       let result: string
       try {
-        result = await executeTool(call.function.name, call.function.arguments, options.agent, options.signal)
+        const isWebSearch = call.function.name === 'web_search'
+        if (isWebSearch && searchDown) throw new Error(searchDown)
+        if (isWebSearch && ++webSearches > MAX_WEB_SEARCHES) {
+          throw new Error(`Limite de ${MAX_WEB_SEARCHES} recherches atteinte pour cette réponse. Réponds avec ce que tu as déjà trouvé.`)
+        }
+        const output = await executeTool(call.function.name, call.function.arguments, options.agent, options.signal).catch(
+          (e: unknown) => {
+            if (isWebSearch && e instanceof ApiError && (e.status === 429 || e.code === 'no_search_keys')) {
+              searchDown = `${e.message} Ne relance pas web_search : réponds avec ce que tu sais et précise que la recherche web n’a pas marché.`
+              throw new Error(searchDown)
+            }
+            throw e
+          },
+        )
+        result = output.text
+        if (output.sources?.length) step.sources = output.sources
         step.status = 'done'
       } catch (e) {
         if (isAbortError(e)) {

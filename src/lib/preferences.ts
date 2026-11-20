@@ -56,6 +56,8 @@ export interface Preferences {
   historyLimit: number
   /** Demander au modèle un titre pour chaque nouvelle conversation (consomme une requête). */
   autoTitle: boolean
+  /** Recherche web (menu « + » du chat) : le modèle peut chercher sur le web via FreeLLMAPI. */
+  webSearch: boolean
 }
 
 /** Bornes des réglages : les mêmes que le Playground de FreeLLMAPI. */
@@ -91,6 +93,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   maxTokens: { enabled: false, value: 1024 },
   historyLimit: 20,
   autoTitle: true,
+  webSearch: true,
 }
 
 const STORAGE_KEY = 'freellm-chat:preferences'
@@ -154,6 +157,7 @@ function sanitize(raw: unknown): Preferences {
     maxTokens: readControl(r.maxTokens, 'maxTokens'),
     historyLimit: Math.round(clamp(r.historyLimit, LIMITS.historyLimit.min, LIMITS.historyLimit.max, d.historyLimit)),
     autoTitle: typeof r.autoTitle === 'boolean' ? r.autoTitle : d.autoTitle,
+    webSearch: typeof r.webSearch === 'boolean' ? r.webSearch : d.webSearch,
   }
 }
 

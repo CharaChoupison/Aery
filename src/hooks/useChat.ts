@@ -130,6 +130,8 @@ interface Options {
   onMissingKey?: () => void
   /** true / false si on sait si ce modèle lit les images, null si on ne sait pas. */
   isVisionModel?: (modelId: string) => boolean | null
+  /** Pareil pour l'appel d'outils (recherche web, agent). */
+  isToolModel?: (modelId: string) => boolean | null
   /** Pour retrouver le projet d'une conversation (instructions, fichiers, mémoire). */
   getProject?: (id: string) => Project | undefined
 }
@@ -181,10 +183,12 @@ export function useChat(options: Options = {}) {
   // On garde la dernière version du callback dans une ref (mise à jour après chaque rendu).
   const onMissingKeyRef = useRef(options.onMissingKey)
   const isVisionRef = useRef(options.isVisionModel)
+  const isToolRef = useRef(options.isToolModel)
   const getProjectRef = useRef(options.getProject)
   useEffect(() => {
     onMissingKeyRef.current = options.onMissingKey
     isVisionRef.current = options.isVisionModel
+    isToolRef.current = options.isToolModel
     getProjectRef.current = options.getProject
   })
   // Projet de la prochaine conversation (accueil d'un projet ouvert, avant le premier message).
@@ -341,7 +345,12 @@ export function useChat(options: Options = {}) {
       try {
         const conv = conversationsRef.current.find((c) => c.id === convId)
         const project = projectId ? getProjectRef.current?.(projectId) : undefined
-        const agent = agentFor(project, folder) // espace Code ou dossier joint : la boucle d'outils
+        let agent = agentFor(project, folder) // espace Code ou dossier joint : la boucle d'outils
+        // Recherche web (menu « + ») : elle passe aussi par la boucle d'outils. Seulement si le modèle
+        // sait appeler des outils (null = on ne sait pas : on essaie, le routeur fera le tri).
+        if (prefs.webSearch && isToolRef.current?.(model) !== false) {
+          agent = agent ? { ...agent, webSearch: true } : { webSearch: true, searchOnly: true }
+        }
         const chatOptions = {
           model,
           signal: controller.signal,

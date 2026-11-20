@@ -1,4 +1,4 @@
-import { CircleAlert, CircleCheck, Eye, EyeOff, Info, KeyRound, LoaderCircle, Plus, Trash2 } from 'lucide-react'
+import { CircleAlert, CircleCheck, Eye, EyeOff, Globe, Info, KeyRound, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Badge, RefreshButton } from '@/components/page'
 import { Group, Notice, Row } from '@/components/settings/layout'
@@ -27,7 +27,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { useAdminData } from '@/hooks/useAdminData'
 import { addKey, deleteKey, formatCompact, formatNumber, getKeys, getProviders, type Provider, type ProviderKey } from '@/lib/admin'
-import { ApiError } from '@/lib/api'
+import { ApiError, listSearchEngines, type SearchEngine } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STATUS: Record<string, { label: string; className?: string }> = {
@@ -41,13 +41,16 @@ const STATUS: Record<string, { label: string; className?: string }> = {
 type Status = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok'; text: string } | { kind: 'warning'; text: string } | { kind: 'error'; text: string }
 
 /**
- * Clés des fournisseurs (Groq, Google, OpenRouter…) enregistrées dans FreeLLMAPI.
+ * Clés des fournisseurs (Groq, Google, OpenRouter…) et des moteurs de recherche web (Tavily, Exa…)
+ * enregistrées dans FreeLLMAPI.
  * La clé tapée part directement vers FreeLLMAPI (via notre proxy) : le chat ne la garde nulle part,
  * et FreeLLMAPI ne la renvoie jamais en clair (seulement masquée : « gsk_…ab12 »).
  */
 export function KeysPage({ onChanged }: { onChanged: () => void }) {
   const providers = useAdminData((s) => getProviders(s), [])
   const keys = useAdminData((s) => getKeys(s), [])
+  // Moteurs de recherche actifs (null = on ne sait pas : on n'affiche alors aucun avertissement).
+  const engines = useAdminData((s) => listSearchEngines(s).catch(() => null), [])
   const [pendingDelete, setPendingDelete] = useState<ProviderKey | null>(null)
   const [deleteStatus, setDeleteStatus] = useState<Status>({ kind: 'idle' })
 
@@ -55,6 +58,7 @@ export function KeysPage({ onChanged }: { onChanged: () => void }) {
   const reload = () => {
     providers.reload()
     keys.reload()
+    engines.reload()
   }
 
   async function confirmDelete() {
@@ -78,7 +82,7 @@ export function KeysPage({ onChanged }: { onChanged: () => void }) {
 
   return (
     <>
-      <AddKeyForm providers={providers.data ?? []} onAdded={() => (reload(), onChanged())} />
+      <AddKeyForm providers={providers.data ?? []} engines={engines.data ?? null} onAdded={() => (reload(), onChanged())} />
 
       <Group
         title="Tes clés"
@@ -146,6 +150,7 @@ export function KeysPage({ onChanged }: { onChanged: () => void }) {
             + {keylessCount} fournisseur{keylessCount > 1 ? 's' : ''} utilisé{keylessCount > 1 ? 's' : ''} sans clé (accès anonyme).
           </p>
         )}
+        {engines.data && <SearchSummary engines={engines.data} />}
       </Group>
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
@@ -176,7 +181,29 @@ interface ProviderGroup {
   items: Provider[]
 }
 
-function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: () => void }) {
+/** Recherche web : quels moteurs peuvent servir maintenant (ceux qui ont une clé utilisable). */
+function SearchSummary({ engines }: { engines: SearchEngine[] }) {
+  const ready = engines.filter((e) => e.available)
+  return (
+    <p className={cn('flex items-start gap-1.5 pt-3 text-xs', ready.length ? 'text-muted-foreground' : 'text-destructive')}>
+      <Globe className="mt-px size-3.5 shrink-0" aria-hidden />
+      {ready.length
+        ? `Recherche web : ${ready.map((e) => e.name).join(', ')}.${ready.length === 1 ? ' Ajoute un 2e moteur pour prendre le relais quand il atteint sa limite.' : ''}`
+        : 'Aucun moteur de recherche utilisable : la recherche web du chat ne marchera pas. Ajoute une clé du groupe « Recherche web ».'}
+    </p>
+  )
+}
+
+function AddKeyForm({
+  providers,
+  engines,
+  onAdded,
+}: {
+  providers: Provider[]
+  /** Moteurs de recherche actifs (null = inconnu). */
+  engines: SearchEngine[] | null
+  onAdded: () => void
+}) {
   const [provider, setProvider] = useState<Provider | null>(null)
   const [key, setKey] = useState('')
   const [label, setLabel] = useState('')
@@ -189,6 +216,9 @@ function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: ()
     { value: 'Recherche web', items: providers.filter((p) => p.kind === 'search') },
   ].filter((g) => g.items.length > 0)
 
+  // Fournisseur de recherche sans moteur actif chez FreeLLMAPI : sa clé serait enregistrée mais jamais utilisée.
+  const activeSearch = engines ? new Set(engines.map((e) => e.provider)) : null
+  const searchInactive = (p: Provider) => p.kind === 'search' && activeSearch !== null && !activeSearch.has(p.platform)
   const keyRequired = provider ? !provider.keyless : true
   const canSubmit = provider !== null && (!keyRequired || key.trim() !== '') && status.kind !== 'busy'
 
@@ -203,7 +233,11 @@ function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: ()
       setShowKey(false)
       onAdded()
       setStatus(
-        result.notice
+        provider.kind === 'search'
+          ? result.notice || searchInactive(provider)
+            ? { kind: 'warning', text: `Clé ${provider.name} enregistrée, mais FreeLLMAPI n’a pas de moteur ${provider.name} actif : elle ne servira pas pour l’instant.` }
+            : { kind: 'ok', text: `Clé ${provider.name} ajoutée (${result.maskedKey}) : la recherche web du chat peut maintenant l’utiliser.` }
+          : result.notice
           ? { kind: 'warning', text: result.notice }
           : {
               kind: 'ok',
@@ -219,7 +253,10 @@ function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: ()
 
   return (
     <form onSubmit={handleSubmit}>
-      <Group title="Ajouter une clé" description="Crée une clé gratuite chez un fournisseur (Groq, Google AI Studio, OpenRouter…) puis colle-la ici.">
+      <Group
+        title="Ajouter une clé"
+        description="Crée une clé gratuite chez un fournisseur (Groq, Google AI Studio, OpenRouter…) ou chez un moteur de recherche web (Tavily, Exa…), puis colle-la ici."
+      >
         <Row
           label="Fournisseur"
           control={
@@ -252,7 +289,9 @@ function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: ()
                           <ComboboxItem key={p.platform} value={p}>
                             <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                               <span className="truncate">{p.name}</span>
-                              {p.keyCount > 0 ? (
+                              {searchInactive(p) ? (
+                                <span className="shrink-0 text-xs text-muted-foreground">inactif</span>
+                              ) : p.keyCount > 0 ? (
                                 <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                                   <KeyRound className="size-3" aria-hidden />
                                   {p.keyCount}
@@ -309,6 +348,12 @@ function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: ()
         />
       </Group>
 
+      {provider && searchInactive(provider) && status.kind === 'idle' && (
+        <Notice tone="warning" icon={Info}>
+          FreeLLMAPI n’a pas de moteur {provider.name} actif pour l’instant (absent de son catalogue, ou éteint dans son dashboard,
+          page Modèles › Search). Une clé ajoutée ici serait enregistrée mais pas utilisée : préfère un autre moteur.
+        </Notice>
+      )}
       {status.kind === 'ok' && (
         <Notice tone="success" icon={CircleCheck}>
           {status.text}

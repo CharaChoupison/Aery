@@ -35,11 +35,12 @@ pub enum ProxyEvent {
     Error { message: String },
 }
 
-/// Seuls les deux endpoints utilisés par le chat sont autorisés.
+/// Seuls les endpoints utilisés par le chat sont autorisés (réponses, modèles, recherche web
+/// et liste des moteurs de recherche actifs).
 /// Même si l'interface était compromise, elle ne pourrait pas utiliser la clé pour autre chose.
 pub fn is_allowed_path(path: &str) -> bool {
     let base = path.split('?').next().unwrap_or_default();
-    matches!(base, "/v1/chat/completions" | "/v1/models")
+    matches!(base, "/v1/chat/completions" | "/v1/models" | "/v1/search" | "/v1/search/engines")
         && !path.contains("..")
         && path.chars().all(|c| c.is_ascii_graphic())
 }
@@ -219,6 +220,9 @@ mod tests {
     fn only_chat_endpoints_are_allowed() {
         assert!(is_allowed_path("/v1/chat/completions"));
         assert!(is_allowed_path("/v1/models?available=true"));
+        assert!(is_allowed_path("/v1/search"));
+        assert!(is_allowed_path("/v1/search/engines"));
+        assert!(!is_allowed_path("/v1/search/../keys"));
         assert!(!is_allowed_path("/v1/keys"));
         assert!(!is_allowed_path("/admin"));
         assert!(!is_allowed_path("/v1/models/../keys"));

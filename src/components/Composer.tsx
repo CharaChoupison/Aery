@@ -1,4 +1,4 @@
-import { ArrowUp, Bot, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
+import { ArrowUp, Bot, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Appear } from '@/components/Appear'
@@ -17,11 +17,14 @@ import { folderName, pickWorkspace, type AgentSettings } from '@/lib/agent/tools
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { setPreferences, usePreferences } from '@/lib/preferences'
 import { IS_TAURI } from '@/lib/transport'
 import { cn } from '@/lib/utils'
 
@@ -39,6 +42,8 @@ interface Props {
   /** Espace Chat : dossier joint en lecture seule, et son changement (absent = option masquée). */
   folder?: string | null
   onFolderChange?: (folder: string | null) => void
+  /** false = le modèle choisi ne sait pas appeler d'outils : pas de recherche web (null = on ne sait pas). */
+  modelUsesTools?: boolean | null
 }
 
 const MAX_HEIGHT = 200 // px : au-delà, le champ défile au lieu de grandir
@@ -56,7 +61,10 @@ export function Composer({
   agent = null,
   folder = null,
   onFolderChange,
+  modelUsesTools = null,
 }: Props) {
+  // Recherche web : simple préférence (activée par défaut), lue par useChat à chaque envoi.
+  const { webSearch } = usePreferences()
   const [value, setValue] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [reading, setReading] = useState(0) // fichiers en cours de lecture
@@ -267,8 +275,8 @@ export function Composer({
                   type="button"
                   variant="ghost"
                   size="icon-lg"
-                  aria-label="Ajouter des fichiers ou un dossier"
-                  title="Ajouter des fichiers ou un dossier"
+                  aria-label="Ajouter des fichiers, options"
+                  title="Ajouter des fichiers, options"
                   className="rounded-full text-muted-foreground data-[popup-open]:bg-muted"
                 />
               }
@@ -288,6 +296,21 @@ export function Composer({
                   <DropdownMenuShortcut>{IS_TAURI ? 'lecture seule' : 'appli Aery'}</DropdownMenuShortcut>
                 </DropdownMenuItem>
               )}
+              <DropdownMenuSeparator />
+              {/* Le menu reste ouvert quand on bascule l'option, pour voir le changement. */}
+              <DropdownMenuCheckboxItem
+                checked={webSearch}
+                onCheckedChange={(checked) => setPreferences({ webSearch: checked })}
+                closeOnClick={false}
+                className="pr-1.5 [&_[data-slot=dropdown-menu-checkbox-item-indicator]]:hidden"
+              >
+                <Globe aria-hidden />
+                Recherche web
+                {webSearch && modelUsesTools === false && (
+                  <span className="ml-auto pl-4 text-xs text-muted-foreground">pas avec ce modèle</span>
+                )}
+                <SwitchLook on={webSearch} className={cn(!(webSearch && modelUsesTools === false) && 'ml-auto')} />
+              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <textarea
@@ -359,6 +382,27 @@ export function Composer({
         </p>
       )}
     </div>
+  )
+}
+
+/** Petit interrupteur décoratif (l'état est porté par l'élément du menu, role="menuitemcheckbox"). */
+function SwitchLook({ on, className }: { on: boolean; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'ml-4 inline-flex h-[18px] w-8 shrink-0 items-center rounded-full p-0.5 transition-colors',
+        on ? 'bg-primary' : 'bg-input dark:bg-input/80',
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          'size-3.5 rounded-full bg-background shadow-sm transition-transform',
+          on && 'translate-x-3.5',
+        )}
+      />
+    </span>
   )
 }
 

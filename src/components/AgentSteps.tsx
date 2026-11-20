@@ -1,4 +1,4 @@
-import { ChevronRight, CircleAlert, FileText, FolderTree, LoaderCircle, Search, SquareTerminal, Wrench } from 'lucide-react'
+import { ChevronRight, CircleAlert, FileText, FolderTree, Globe, LoaderCircle, Search, SquareTerminal, Wrench } from 'lucide-react'
 import { useState, type ComponentType } from 'react'
 import { Appear } from '@/components/Appear'
 import type { AgentStep } from '@/lib/agent/loop'
@@ -11,6 +11,7 @@ const TOOL_ICONS: Record<string, ComponentType<{ className?: string; 'aria-hidde
   list_dir: FolderTree,
   read_file: FileText,
   search: Search,
+  web_search: Globe,
 }
 
 /** Les étapes de l'agent, au-dessus de sa réponse : textes intermédiaires et appels d'outils repliables. */
@@ -51,6 +52,11 @@ function ToolStep({ step }: { step: AgentStep & { type: 'tool' } }) {
       >
         <Icon className={cn('size-4 shrink-0', step.status === 'running' && 'animate-spin')} aria-hidden />
         <span className="truncate">{step.label}</span>
+        {step.sources && (
+          <span className="shrink-0 text-xs opacity-70">
+            {step.sources.length} {step.sources.length > 1 ? 'résultats' : 'résultat'}
+          </span>
+        )}
         {step.durationMs !== undefined && (
           <span className="shrink-0 text-xs tabular-nums opacity-70">{formatDuration(step.durationMs)}</span>
         )}
@@ -58,12 +64,48 @@ function ToolStep({ step }: { step: AgentStep & { type: 'tool' } }) {
       </button>
       {open && (
         <Appear from={{ autoAlpha: 0, y: -6, duration: 0.25 }} className="mt-1 mb-2 flex flex-col gap-2">
-          <Details title={step.tool === 'run_js' ? 'Code' : 'Paramètres'} text={formatArgs(step)} />
-          {step.result !== undefined && <Details title="Résultat" text={step.result} error={step.status === 'error'} />}
+          {step.sources ? (
+            <SourceList sources={step.sources} />
+          ) : (
+            <>
+              <Details title={step.tool === 'run_js' ? 'Code' : 'Paramètres'} text={formatArgs(step)} />
+              {step.result !== undefined && <Details title="Résultat" text={step.result} error={step.status === 'error'} />}
+            </>
+          )}
         </Appear>
       )}
     </div>
   )
+}
+
+/** Recherche web : les pages trouvées, avec leur site. */
+function SourceList({ sources }: { sources: NonNullable<(AgentStep & { type: 'tool' })['sources']> }) {
+  return (
+    <ul aria-label="Sources" className="flex flex-col gap-0.5 rounded-lg border bg-muted/40 p-1.5">
+      {sources.map((source, i) => (
+        <li key={`${i}-${source.url}`}>
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            title={source.url}
+            className="flex min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-sm transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <span className="min-w-0 truncate">{source.title || source.url}</span>
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">{hostOf(source.url)}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
 }
 
 function Details({ title, text, error = false }: { title: string; text: string; error?: boolean }) {

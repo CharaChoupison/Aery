@@ -12,7 +12,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useChat, type Conversation } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
-import { useVisionModels } from '@/hooks/useVisionModels'
+import { useModelCapabilities } from '@/hooks/useModelCapabilities'
 import { useProjects } from '@/hooks/useProjects'
 import { conversationSpace, projectSpace, type Project, type Space } from '@/lib/projects'
 import { folderName, pickWorkspace, releaseWorkspace } from '@/lib/agent/tools'
@@ -66,9 +66,14 @@ export default function App() {
 
   // Incrémenté quand des modèles sont activés / désactivés ou des clés ajoutées (Paramètres).
   const [modelsVersion, setModelsVersion] = useState(0)
-  const isVisionModel = useVisionModels(settings?.hasKey ?? false, modelsVersion)
+  const { isVisionModel, isToolModel } = useModelCapabilities(settings?.hasKey ?? false, modelsVersion)
   const projects = useProjects()
-  const chat = useChat({ onMissingKey: () => openSettings('connection'), isVisionModel, getProject: projects.getProject })
+  const chat = useChat({
+    onMissingKey: () => openSettings('connection'),
+    isVisionModel,
+    isToolModel,
+    getProject: projects.getProject,
+  })
   // Fenêtre du projet : null = fermée ; { id: null, space } = création ; { id } = modification.
   const [projectDialog, setProjectDialog] = useState<{ id: string | null; space?: Space } | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
@@ -233,6 +238,7 @@ export default function App() {
       busy={isStreaming && !activeIsStreaming}
       focusKey={active?.id ?? 'new'}
       modelReadsImages={isVisionModel(chat.selectedModel)}
+      modelUsesTools={isToolModel(chat.selectedModel)}
       agent={space === 'code' && activeProject ? { workspace: activeProject.workspace } : null}
       // Espace Chat : on peut joindre un dossier en lecture seule à la conversation.
       {...(space === 'chat' && { folder: chat.folder, onFolderChange: chat.setFolder })}
