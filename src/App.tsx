@@ -1,4 +1,4 @@
-import { Brain, FolderOpen, PanelLeft, Pencil, SlidersHorizontal, SquarePen } from 'lucide-react'
+import { Brain, CodeXml, FolderCode, FolderOpen, FolderPlus, PanelLeft, Pencil, SlidersHorizontal, SquarePen } from 'lucide-react'
 import { AeryLogo } from '@/components/AeryLogo'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
@@ -14,7 +14,9 @@ import { useChat, type Conversation } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
 import { useVisionModels } from '@/hooks/useVisionModels'
 import { useProjects } from '@/hooks/useProjects'
-import type { Project } from '@/lib/projects'
+import { conversationSpace, projectSpace, type Project, type Space } from '@/lib/projects'
+import { folderName, pickWorkspace, releaseWorkspace } from '@/lib/agent/tools'
+import { IS_TAURI } from '@/lib/transport'
 import { ProjectDialog } from '@/components/ProjectDialog'
 import { Button } from '@/components/ui/button'
 import { useNavHistory, type Place } from '@/hooks/useNavHistory'
@@ -32,6 +34,17 @@ const SIDEBAR_WIDTH = 256
 
 /** Ce qu'affiche la zone principale. Modèles, clés, utilisation et analytique sont dans les Paramètres. */
 export type View = 'chat'
+
+// Espace affiché au lancement : le dernier utilisé (simple préférence, rien de secret).
+const SPACE_KEY = 'freellm-chat:space'
+
+function readSpace(): Space {
+  try {
+    return localStorage.getItem(SPACE_KEY) === 'code' ? 'code' : 'chat'
+  } catch {
+    return 'chat'
+  }
+}
 
 export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -56,9 +69,28 @@ export default function App() {
   const isVisionModel = useVisionModels(settings?.hasKey ?? false, modelsVersion)
   const projects = useProjects()
   const chat = useChat({ onMissingKey: () => openSettings('connection'), isVisionModel, getProject: projects.getProject })
-  // Fenêtre du projet : null = fermée ; { id: null } = création ; { id } = modification.
-  const [projectDialog, setProjectDialog] = useState<{ id: string | null } | null>(null)
+  // Fenêtre du projet : null = fermée ; { id: null, space } = création ; { id } = modification.
+  const [projectDialog, setProjectDialog] = useState<{ id: string | null; space?: Space } | null>(null)
+  const [projectError, setProjectError] = useState<string | null>(null)
   const activeProject = chat.activeProjectId ? projects.getProject(chat.activeProjectId) : undefined
+
+  // Espace Chat / Code. Une conversation ou un projet ouvert impose son espace : on se synchronise
+  // pendant le rendu (pas dans un effet), comme pour les projets dépliés de la barre latérale.
+  const [space, setSpace] = useState<Space>(readSpace)
+  const imposedSpace = chat.active
+    ? conversationSpace(chat.active, projects.getProject)
+    : activeProject
+      ? projectSpace(activeProject)
+      : null
+  if (imposedSpace && imposedSpace !== space) setSpace(imposedSpace)
+  useEffect(() => {
+    try {
+      localStorage.setItem(SPACE_KEY, space)
+    } catch {
+      // pas grave : on repartira sur le Chat
+    }
+  }, [space])
+  const codeProjects = projects.projects.filter((p) => projectSpace(p) === 'code')
   const models = useModels(settings?.hasKey ?? false)
   const { active, activeError, isStreaming, streamingId } = chat
   const activeIsStreaming = active !== null && streamingId === active.id
@@ -67,10 +99,11 @@ export default function App() {
   const { selectConversation, newConversation: resetConversation, conversations } = chat
   const goTo = useCallback(
     (place: Place) => {
+      setSpace(place.space)
       if (place.conversationId) selectConversation(place.conversationId)
       else resetConversation(place.projectId ?? null)
     },
-    [selectConversation, resetConversation],
+    [selectConversation, resetConversation, setSpace],
   )
   const placeExists = useCallback(
     (place: Place) =>
@@ -79,7 +112,7 @@ export default function App() {
     [conversations, projects],
   )
   const nav = useNavHistory(
-    { view: 'chat', conversationId: active?.id ?? null, projectId: active ? null : chat.activeProjectId },
+    { view: 'chat', conversationId: active?.id ?? null, projectId: active ? null : chat.activeProjectId, space, createdAt: active?.createdAt },
     goTo,
     placeExists,
   )
@@ -96,6 +129,51 @@ export default function App() {
     startUpdateChecks() // appli installée seulement : y a-t-il une nouvelle version dans le repo git ?
   }, [])
 
+  /** Changer d'espace : on quitte la conversation ouverte pour l'accueil de l'autre espace. */
+  function changeSpace(next: Space) {
+    setMobileSidebarOpen(false)
+    if (next === space && !active) return
+    chat.newConversation(null)
+    setSpace(next)
+  }
+
+  /** Nouvelle conversation : en Code, dans le projet de code ouvert (sinon l'accueil Code). */
+  function newConversation() {
+    const inCodeProject = space === 'code' && activeProject && projectSpace(activeProject) === 'code'
+    chat.newConversation(inCodeProject ? activeProject.id : null)
+  }
+
+  /**
+   * Espace Code : « Ajouter un dossier ». Appli : fenêtre de macOS, puis projet nommé comme le dossier
+   * (ou le projet existant s'il y en a déjà un pour ce dossier). Web : fenêtre du projet (nom seulement).
+   */
+  async function addCodeProject() {
+    setMobileSidebarOpen(false)
+    setProjectError(null)
+    if (!IS_TAURI) {
+      setProjectDialog({ id: null, space: 'code' })
+      return
+    }
+    try {
+      const workspace = await pickWorkspace()
+      if (!workspace) return
+      const existing = codeProjects.find((p) => p.workspace === workspace)
+      const project = existing ?? projects.createProject({ name: folderName(workspace), space: 'code', workspace })
+      setSpace('code')
+      chat.newConversation(project.id)
+    } catch (e) {
+      setProjectError((e as Error).message)
+    }
+  }
+
+  /** Plus aucun projet n'utilise ce dossier : on retire l'autorisation côté Rust. */
+  function releaseIfUnused(workspace: string | undefined, exceptId: string) {
+    const used =
+      projects.projects.some((p) => p.id !== exceptId && p.workspace === workspace) ||
+      chat.conversations.some((c) => c.folder === workspace) // dossier joint à une conversation du Chat
+    if (workspace && !used) void releaseWorkspace(workspace)
+  }
+
   const sidebarProps = {
     conversations: chat.conversations,
     loaded: chat.loaded,
@@ -105,7 +183,7 @@ export default function App() {
     onRename: chat.renameConversation,
     onDelete: chat.deleteConversation,
     onNew: () => {
-      chat.newConversation()
+      newConversation()
       setMobileSidebarOpen(false)
     },
     onSelect: (id: string) => {
@@ -137,10 +215,14 @@ export default function App() {
       setProjectDialog({ id })
     },
     onDeleteProject: (id: string) => {
+      releaseIfUnused(projects.getProject(id)?.workspace, id)
       void projects.deleteProject(id)
       chat.detachProject(id)
     },
     onMove: chat.moveConversation,
+    space,
+    onSpaceChange: changeSpace,
+    onAddCodeProject: () => void addCodeProject(),
   }
 
   const composer = (
@@ -151,10 +233,12 @@ export default function App() {
       busy={isStreaming && !activeIsStreaming}
       focusKey={active?.id ?? 'new'}
       modelReadsImages={isVisionModel(chat.selectedModel)}
+      agent={space === 'code' && activeProject ? { workspace: activeProject.workspace } : null}
+      // Espace Chat : on peut joindre un dossier en lecture seule à la conversation.
+      {...(space === 'chat' && { folder: chat.folder, onFolderChange: chat.setFolder })}
     />
   )
   const isEmpty = !active || active.messages.length === 0
-  const newConversation = () => chat.newConversation()
   // Largeur de la colonne de messages (réglage « Largeur de la conversation »).
   const widthClass = prefs.chatWidth === 'wide' ? 'max-w-5xl' : 'max-w-3xl'
 
@@ -218,7 +302,7 @@ export default function App() {
             )}
             <span className="pointer-events-none min-w-0 truncate px-2 text-sm font-medium">
               {activeProject && active && <span className="text-muted-foreground">{activeProject.name} / </span>}
-              {active?.title ?? activeProject?.name ?? 'Nouvelle conversation'}
+              {active?.title ?? activeProject?.name ?? (space === 'code' ? 'Code' : 'Nouvelle conversation')}
             </span>
             <div className="ml-auto flex items-center gap-1">
               <IconButton label="Réglages du modèle" onClick={() => openSettings('model')} className="relative">
@@ -250,6 +334,11 @@ export default function App() {
               {settingsError}
             </p>
           )}
+          {projectError && (
+            <p role="alert" className="mx-4 rounded-lg bg-destructive/5 p-3 text-sm text-destructive">
+              {projectError}
+            </p>
+          )}
 
           {isEmpty && activeProject ? (
             // Accueil d'un projet : son nom, ses conversations, et une zone de saisie pour en commencer une.
@@ -261,6 +350,14 @@ export default function App() {
               widthClass={widthClass}
               onEdit={() => setProjectDialog({ id: activeProject.id })}
               onSelect={chat.selectConversation}
+            />
+          ) : isEmpty && space === 'code' ? (
+            // Accueil de l'espace Code : choisir (ou ajouter) le projet sur lequel on travaille.
+            <CodeHome
+              projects={codeProjects}
+              widthClass={widthClass}
+              onOpen={(id) => chat.newConversation(id)}
+              onAdd={() => void addCodeProject()}
             />
           ) : isEmpty ? (
             // Conversation vide : titre et zone de saisie au centre, comme ChatGPT.
@@ -302,12 +399,19 @@ export default function App() {
       {projectDialog && (
         <ProjectDialog
           project={projectDialog.id ? (projects.getProject(projectDialog.id) ?? null) : null}
+          space={projectDialog.space}
           conversations={chat.conversations}
           onClose={() => setProjectDialog(null)}
           onForgetSummary={chat.forgetSummary}
           onSave={(draft) => {
-            if (projectDialog.id) projects.updateProject(projectDialog.id, draft)
-            else chat.newConversation(projects.createProject(draft).id) // on ouvre le nouveau projet
+            if (projectDialog.id) {
+              const before = projects.getProject(projectDialog.id)?.workspace
+              if (before !== draft.workspace) releaseIfUnused(before, projectDialog.id)
+              projects.updateProject(projectDialog.id, draft)
+            } else {
+              const created = projects.createProject({ ...draft, ...(projectDialog.space === 'code' && { space: 'code' as const }) })
+              chat.newConversation(created.id) // on ouvre le nouveau projet
+            }
             setProjectDialog(null)
           }}
         />
@@ -349,7 +453,10 @@ function ProjectHome({
   onEdit: () => void
   onSelect: (id: string) => void
 }) {
+  const code = projectSpace(project) === 'code'
+  const ProjectIcon = code ? FolderCode : FolderOpen
   const details = [
+    code && (project.workspace ? `dossier ${folderName(project.workspace)}` : IS_TAURI ? 'aucun dossier' : 'JavaScript seulement'),
     project.instructions.trim() && 'instructions',
     project.files.length > 0 && `${project.files.length} fichier${project.files.length > 1 ? 's' : ''}`,
     project.memory && 'mémoire activée',
@@ -359,11 +466,13 @@ function ProjectHome({
       <Appear stagger={0.08} from={{ autoAlpha: 0, y: 20, duration: 0.5 }} className={cn('mx-auto flex w-full flex-col gap-6 px-4 pt-[12vh] pb-8', widthClass)}>
         <div className="flex items-center gap-3">
           <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-muted">
-            <FolderOpen className="size-6" aria-hidden />
+            <ProjectIcon className="size-6" aria-hidden />
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-2xl font-semibold">{project.name}</h2>
-            <p className="text-sm text-muted-foreground">{details.length ? details.join(' · ') : 'Ajoute des instructions pour donner du contexte au modèle.'}</p>
+            <p className="truncate text-sm text-muted-foreground" title={project.workspace}>
+              {details.length ? details.join(' · ') : 'Ajoute des instructions pour donner du contexte au modèle.'}
+            </p>
           </div>
           <Button variant="outline" className="h-9" onClick={onEdit}>
             <Pencil aria-hidden />
@@ -389,6 +498,60 @@ function ProjectHome({
             </ul>
           </section>
         )}
+      </Appear>
+    </div>
+  )
+}
+
+/** Accueil de l'espace Code : les projets de code (un par dossier), et de quoi en ajouter un. */
+function CodeHome({
+  projects,
+  widthClass,
+  onOpen,
+  onAdd,
+}: {
+  projects: Project[]
+  widthClass: string
+  onOpen: (id: string) => void
+  onAdd: () => void
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <Appear stagger={0.08} from={{ autoAlpha: 0, y: 20, duration: 0.5 }} className={cn('mx-auto flex w-full flex-col gap-6 px-4 pt-[12vh] pb-8', widthClass)}>
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="flex size-12 items-center justify-center rounded-2xl bg-muted">
+            <CodeXml className="size-6" aria-hidden />
+          </span>
+          <h2 className="text-2xl font-semibold sm:text-3xl">Sur quoi on travaille ?</h2>
+          <p className="max-w-md text-sm text-muted-foreground">
+            {IS_TAURI
+              ? 'Chaque projet de code est lié à un dossier. L’agent peut le lire, y chercher et exécuter du JavaScript (sans rien modifier).'
+              : 'Ici, l’agent peut exécuter du JavaScript. La lecture d’un dossier se fait dans l’appli Aery.'}
+          </p>
+        </div>
+        {projects.length > 0 && (
+          <ul aria-label="Projets de code" className="flex flex-col divide-y rounded-2xl border">
+            {projects.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  onClick={() => onOpen(p.id)}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-muted/50"
+                >
+                  <FolderCode className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{p.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{p.workspace ?? 'Aucun dossier'}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Button variant="outline" className="h-10 self-center" onClick={onAdd}>
+          <FolderPlus aria-hidden />
+          {IS_TAURI ? 'Ajouter un dossier' : 'Nouveau projet de code'}
+        </Button>
       </Appear>
     </div>
   )

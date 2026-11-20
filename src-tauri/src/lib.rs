@@ -3,19 +3,24 @@
 //!  - proxy    : relais en streaming vers FreeLLMAPI, qui ajoute la clé ;
 //!  - admin    : API d’admin FreeLLMAPI (statistiques en lecture + activer un modèle, stratégie de routage, ajouter/supprimer une clé) ;
 //!  - launcher : lance FreeLLMAPI en arrière-plan si elle n'est pas ouverte ;
-//!  - updates  : mise à jour de l'appli depuis le repo git du projet.
+//!  - updates  : mise à jour de l'appli depuis le repo git du projet ;
+//!  - workspace : dossiers de travail de l'agent (lecture seule : lister, lire, chercher).
 
 mod admin;
 mod launcher;
 mod proxy;
 mod settings;
 mod updates;
+mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Fenêtre « Choisir un dossier », utilisée seulement côté Rust (aucune permission pour l'interface).
+        .plugin(tauri_plugin_dialog::init())
         .manage(proxy::Requests::default())
         .manage(admin::DashboardSession::default())
+        .manage(workspace::Workspaces::default())
         .setup(|app| {
             // Dès l'ouverture, pour que FreeLLMAPI soit prête avant le premier message.
             let port = settings::read_port(app.handle());
@@ -29,6 +34,9 @@ pub fn run() {
             proxy::cancel_request,
             updates::check_updates,
             updates::run_update,
+            workspace::pick_workspace,
+            workspace::workspace_tool,
+            workspace::release_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'appli");

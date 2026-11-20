@@ -96,6 +96,10 @@ function sendError(res: ServerResponse, status: number, code: string, message: s
 function isTrustedRequest(req: IncomingMessage): boolean {
   const fetchSite = req.headers['sec-fetch-site']
   if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
+  // Notre page n'appelle ces routes qu'avec fetch() (« empty »). Un `import()` lancé depuis le bac à
+  // sable de l'agent (outil run_js) arriverait en « script » : refusé, même s'il est de même origine.
+  const fetchDest = req.headers['sec-fetch-dest']
+  if (fetchDest && fetchDest !== 'empty') return false
 
   const origin = req.headers.origin
   if (origin) {

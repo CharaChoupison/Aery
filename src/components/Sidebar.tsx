@@ -2,12 +2,15 @@ import {
   ChevronRight,
   CircleArrowUp,
   CircleAlert,
+  CodeXml,
   Folder,
+  FolderCode,
   FolderInput,
   FolderMinus,
   FolderOpen,
   FolderPlus,
   LoaderCircle,
+  MessageSquare,
   MoreHorizontal,
   Plus,
   PanelLeftClose,
@@ -32,7 +35,9 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -43,7 +48,7 @@ import { Input } from '@/components/ui/input'
 import { IconButton } from '@/components/IconButton'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import type { Conversation } from '@/hooks/useChat'
-import type { Project } from '@/lib/projects'
+import { projectSpace, type Project, type Space } from '@/lib/projects'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { useUpdates } from '@/lib/updates'
 import { Appear } from '@/components/Appear'
@@ -77,6 +82,11 @@ interface Props {
   onEditProject: (id: string) => void
   onDeleteProject: (id: string) => void
   onMove: (conversationId: string, projectId: string | null) => void
+  /** Espace affiché : Chat (conversations normales) ou Code (projets liés à un dossier, mode Agent). */
+  space: Space
+  onSpaceChange: (space: Space) => void
+  /** Espace Code : ajouter un projet (un dossier). */
+  onAddCodeProject: () => void
 }
 
 // --- Regroupement par date, comme ChatGPT -------------------------------------------
@@ -107,7 +117,11 @@ function groupByDate(conversations: Conversation[]): { label: string; items: Con
 // --- La barre latérale ---------------------------------------------------------------
 
 export function Sidebar(props: Props) {
-  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, trafficLights, nav, projects, activeProjectId } = props
+  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, trafficLights, nav, projects, activeProjectId, space } = props
+  const isCode = space === 'code'
+  // Projets de l'espace affiché (la liste complète reste dans props.projects, pour « Déplacer vers »).
+  const spaceProjects = projects.filter((p) => projectSpace(p) === space)
+  const addProject = isCode ? props.onAddCodeProject : props.onNewProject
   const [pendingProjectDelete, setPendingProjectDelete] = useState<Project | null>(null)
   // Projets dépliés. Celui qu'on ouvre se déplie tout seul (synchronisé pendant le rendu, pas dans un effet).
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(activeProjectId ? [activeProjectId] : []))
@@ -168,7 +182,8 @@ export function Sidebar(props: Props) {
         {!trafficLights && collapseButton}
       </div>
 
-      <div className="px-2">
+      <div className="flex flex-col gap-2 px-2">
+        <SpaceSwitcher space={space} onChange={props.onSpaceChange} />
         <Button variant="ghost" className="h-9 w-full justify-start gap-2 px-2" onClick={onNew}>
           <SquarePen className="size-4" aria-hidden />
           Nouvelle conversation
@@ -182,22 +197,23 @@ export function Sidebar(props: Props) {
             {storageError}
           </p>
         )}
-        {/* Projets : des dossiers de conversations qui partagent instructions, fichiers et mémoire. */}
-        <section className="mb-4" aria-label="Projets">
+        {/* Projets : des dossiers de conversations qui partagent instructions, fichiers et mémoire.
+            Espace Code : chaque projet est lié à un dossier que l'agent peut lire. */}
+        <section className="mb-4" aria-label={isCode ? 'Projets de code' : 'Projets'}>
           <div className="flex items-center justify-between pr-0.5 pl-2">
-            <h3 className="text-xs font-medium text-muted-foreground">Projets</h3>
-            <IconButton label="Nouveau projet" size="icon-sm" onClick={props.onNewProject} className="text-muted-foreground">
+            <h3 className="text-xs font-medium text-muted-foreground">{isCode ? 'Projets de code' : 'Projets'}</h3>
+            <IconButton label={isCode ? 'Ajouter un dossier' : 'Nouveau projet'} size="icon-sm" onClick={addProject} className="text-muted-foreground">
               <Plus className="size-3.5" aria-hidden />
             </IconButton>
           </div>
-          {projects.length === 0 ? (
-            <Button variant="ghost" className="h-8 w-full justify-start gap-2 px-2 text-sm font-normal text-muted-foreground" onClick={props.onNewProject}>
+          {spaceProjects.length === 0 ? (
+            <Button variant="ghost" className="h-8 w-full justify-start gap-2 px-2 text-sm font-normal text-muted-foreground" onClick={addProject}>
               <FolderPlus className="size-4" aria-hidden />
-              Nouveau projet
+              {isCode ? 'Ajouter un dossier' : 'Nouveau projet'}
             </Button>
           ) : (
             <ul className="flex flex-col gap-0.5">
-              {projects.map((p) => {
+              {spaceProjects.map((p) => {
                 const items = conversations.filter((c) => c.projectId === p.id)
                 const open = expanded.has(p.id)
                 return (
@@ -232,7 +248,7 @@ export function Sidebar(props: Props) {
           )}
         </section>
 
-        {!loaded ? (
+        {isCode ? null : !loaded ? (
           <LoaderCircle className="mx-2 size-4 animate-spin text-muted-foreground" aria-label="Chargement de l’historique" />
         ) : loose.length === 0 ? (
           conversations.length === 0 && <p className="px-2 text-sm text-muted-foreground">Aucune conversation pour l’instant.</p>
@@ -283,8 +299,9 @@ export function Sidebar(props: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>Supprimer le projet ?</AlertDialogTitle>
             <AlertDialogDescription>
-              « {pendingProjectDelete?.name} », ses instructions et ses fichiers seront supprimés. Ses conversations sont gardées :
-              elles reviennent dans la liste principale.
+              « {pendingProjectDelete?.name} », ses instructions et ses fichiers seront supprimés
+              {projectSpace(pendingProjectDelete ?? undefined) === 'code' && ' (le dossier lui-même n’est pas touché)'}. Ses conversations
+              sont gardées : elles reviennent dans la liste principale du Chat.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -435,33 +452,7 @@ function ConversationItem({
             <Pencil aria-hidden />
             Renommer
           </DropdownMenuItem>
-          {(projects.length > 0 || c.projectId) && (
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <FolderInput aria-hidden />
-                Déplacer vers
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                {projects
-                  .filter((p) => p.id !== c.projectId)
-                  .map((p) => (
-                    <DropdownMenuItem key={p.id} onClick={() => onMove(c.id, p.id)}>
-                      <Folder aria-hidden />
-                      <span className="truncate">{p.name}</span>
-                    </DropdownMenuItem>
-                  ))}
-                {c.projectId && (
-                  <>
-                    {projects.length > 1 && <DropdownMenuSeparator />}
-                    <DropdownMenuItem onClick={() => onMove(c.id, null)}>
-                      <FolderMinus aria-hidden />
-                      Retirer du projet
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          )}
+          <MoveMenu conversation={c} projects={projects} onMove={onMove} />
           <DropdownMenuItem variant="destructive" onClick={() => onAskDelete(c)}>
             <Trash2 aria-hidden />
             Supprimer
@@ -493,7 +484,8 @@ function ProjectItem({
   onEdit: () => void
   onAskDelete: () => void
 }) {
-  const Icon = open ? FolderOpen : Folder
+  const code = projectSpace(project) === 'code'
+  const Icon = code ? FolderCode : open ? FolderOpen : Folder
   return (
     <div className={cn('group/item flex items-center rounded-lg transition-colors hover:bg-sidebar-accent', active && 'bg-sidebar-accent')}>
       <button
@@ -510,7 +502,7 @@ function ProjectItem({
         type="button"
         onClick={onOpen}
         aria-current={active ? 'page' : undefined}
-        title={project.name}
+        title={code && project.workspace ? `${project.name}\n${project.workspace}` : project.name}
         className={cn('flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left text-sm', active && 'font-medium')}
       >
         <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -545,5 +537,92 @@ function ProjectItem({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  )
+}
+
+// --- Sélecteur d'espace -----------------------------------------------------------------
+
+/** Chat | Code, comme les onglets de l'appli Claude. */
+function SpaceSwitcher({ space, onChange }: { space: Space; onChange: (space: Space) => void }) {
+  const options = [
+    { value: 'chat' as const, label: 'Chat', Icon: MessageSquare },
+    { value: 'code' as const, label: 'Code', Icon: CodeXml },
+  ]
+  return (
+    <div role="group" aria-label="Espace" className="grid grid-cols-2 gap-1 rounded-lg bg-sidebar-accent/60 p-0.5">
+      {options.map(({ value, label, Icon }) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={space === value}
+          onClick={() => onChange(value)}
+          className={cn(
+            'flex h-7 items-center justify-center gap-1.5 rounded-md text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+            space === value ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Icon className="size-3.5" aria-hidden />
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// --- « Déplacer vers » : projets du Chat et projets de code -------------------------------
+
+function MoveMenu({
+  conversation: c,
+  projects,
+  onMove,
+}: {
+  conversation: Conversation
+  projects: Project[]
+  onMove: (conversationId: string, projectId: string | null) => void
+}) {
+  const others = projects.filter((p) => p.id !== c.projectId)
+  const chat = others.filter((p) => projectSpace(p) === 'chat')
+  const code = others.filter((p) => projectSpace(p) === 'code')
+  const canLeave = Boolean(c.projectId) // « Hors projet » = liste principale du Chat
+  if (!chat.length && !code.length && !canLeave) return null
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <FolderInput aria-hidden />
+        Déplacer vers
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-52">
+        {(chat.length > 0 || canLeave) && (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Chat</DropdownMenuLabel>
+            {chat.map((p) => (
+              <DropdownMenuItem key={p.id} onClick={() => onMove(c.id, p.id)}>
+                <Folder aria-hidden />
+                <span className="truncate">{p.name}</span>
+              </DropdownMenuItem>
+            ))}
+            {canLeave && (
+              <DropdownMenuItem onClick={() => onMove(c.id, null)}>
+                <FolderMinus aria-hidden />
+                Hors projet
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuGroup>
+        )}
+        {(chat.length > 0 || canLeave) && code.length > 0 && <DropdownMenuSeparator />}
+        {code.length > 0 && (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Code</DropdownMenuLabel>
+            {code.map((p) => (
+              <DropdownMenuItem key={p.id} onClick={() => onMove(c.id, p.id)}>
+                <FolderCode aria-hidden />
+                <span className="truncate">{p.name}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }

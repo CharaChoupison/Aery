@@ -204,7 +204,31 @@ export interface ChatOptions {
   sampling?: { temperature?: number; top_p?: number; max_tokens?: number }
   /** Nombre de messages récents envoyés (défaut : MAX_HISTORY). */
   historyLimit?: number
+  /** Outils que le modèle peut appeler (mode Agent). */
+  tools?: ToolDefinition[]
+  /** « none » = le modèle doit répondre en texte (dernière étape de l'agent). */
+  toolChoice?: 'auto' | 'none'
+  /** Messages bruts ajoutés après l'historique : les tours d'outils de l'agent. */
+  extraMessages?: RawMessage[]
 }
+
+/** Un outil au format OpenAI : nom, description et paramètres (JSON Schema). */
+export interface ToolDefinition {
+  type: 'function'
+  function: { name: string; description: string; parameters: Record<string, unknown> }
+}
+
+/** Un appel d'outil demandé par le modèle. `arguments` est du JSON… en texte (parfois invalide). */
+export interface ToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
+}
+
+/** Message au format OpenAI, tel qu'envoyé (pour les tours d'outils). */
+export type RawMessage =
+  | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
+  | { role: 'tool'; tool_call_id: string; content: string }
 
 /** Les images ne sont envoyées que pour les N derniers messages qui en ont (sinon la requête devient énorme). */
 const IMAGE_MESSAGES_SENT = 2
@@ -233,9 +257,10 @@ function completionBody(messages: ChatMessage[], options: ChatOptions, stream: b
   const system = options.systemPrompt?.trim()
   return JSON.stringify({
     model: options.model ?? 'auto',
-    messages: system ? [{ role: 'system', content: system }, ...history] : history,
+    messages: [...(system ? [{ role: 'system', content: system }] : []), ...history, ...(options.extraMessages ?? [])],
     stream,
     ...options.sampling,
+    ...(options.tools?.length && { tools: options.tools, tool_choice: options.toolChoice ?? 'auto' }),
   })
 }
 
@@ -252,9 +277,23 @@ export async function chatCompletion(messages: ChatMessage[], options: ChatOptio
   return { content: data.choices[0]?.message?.content ?? '', model: data.model }
 }
 
+/** Morceau d'appel d'outil en streaming : les arguments arrivent en plusieurs fois, repérés par `index`. */
+interface ToolCallDelta {
+  index?: number
+  id?: string
+  function?: { name?: string; arguments?: string }
+}
+
 interface StreamChunk {
   model?: string
-  choices?: { delta?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null } }[]
+  choices?: {
+    delta?: {
+      content?: string | null
+      reasoning?: string | null
+      reasoning_content?: string | null
+      tool_calls?: ToolCallDelta[] | null
+    }
+  }[]
   error?: { message?: string; code?: string }
 }
 
@@ -263,6 +302,35 @@ export type StreamEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'model'; model: string }
+  /** Fin de la réponse : les appels d'outils demandés (mode Agent), reconstitués en entier. */
+  | { type: 'tool_calls'; calls: ToolCall[] }
+
+/**
+ * Recolle les morceaux d'appels d'outils. Certains fournisseurs envoient tout d'un coup,
+ * d'autres les arguments caractère par caractère : dans les deux cas on concatène par `index`.
+ */
+class ToolCallAccumulator {
+  private calls = new Map<number, ToolCall>()
+
+  add(deltas: ToolCallDelta[]) {
+    deltas.forEach((d, position) => {
+      const index = d.index ?? position
+      const call = this.calls.get(index) ?? { id: '', type: 'function' as const, function: { name: '', arguments: '' } }
+      if (d.id) call.id = d.id
+      if (d.function?.name) call.function.name = d.function.name // envoyé une seule fois (ou répété à l’identique)
+      if (d.function?.arguments) call.function.arguments += d.function.arguments
+      this.calls.set(index, call)
+    })
+  }
+
+  /** Les appels complets, avec un identifiant même si le fournisseur n'en a pas donné. */
+  result(): ToolCall[] {
+    return [...this.calls.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([index, c]) => ({ ...c, id: c.id || `call_${index}_${Date.now().toString(36)}` }))
+      .filter((c) => c.function.name)
+  }
+}
 
 /**
  * Streaming : renvoie les événements au fur et à mesure.
@@ -325,17 +393,27 @@ async function* streamChatRaw(messages: ChatMessage[], options: ChatOptions): As
 
   // Sécurité : si le serveur ignore stream:true et renvoie du JSON classique, on s'adapte.
   if (res.headers.get('content-type')?.includes('application/json')) {
-    const data = (await res.json()) as { model?: string; choices?: { message?: { content?: string | null } }[] }
+    const data = (await res.json()) as {
+      model?: string
+      choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[]
+    }
     if (!routedVia && data.model) yield { type: 'model', model: data.model }
     const content = data.choices?.[0]?.message?.content
     if (content) yield { type: 'text', text: content }
+    const calls = data.choices?.[0]?.message?.tool_calls
+    if (calls?.length) {
+      const acc = new ToolCallAccumulator()
+      acc.add(calls.map((c, index) => ({ index, id: c.id, function: c.function })))
+      yield { type: 'tool_calls', calls: acc.result() }
+    }
     return
   }
 
   if (!res.body) throw new ApiError(502, 'Réponse vide de FreeLLMAPI.')
 
+  const toolCalls = new ToolCallAccumulator()
   for await (const data of readSSE(res.body)) {
-    if (data === '[DONE]') return
+    if (data === '[DONE]') break
 
     let chunk: StreamChunk
     try {
@@ -363,5 +441,9 @@ async function* streamChatRaw(messages: ChatMessage[], options: ChatOptions): As
     const thought = delta?.reasoning ?? delta?.reasoning_content
     if (thought) yield { type: 'reasoning', text: thought }
     if (delta?.content) yield { type: 'text', text: delta.content }
+    if (delta?.tool_calls?.length) toolCalls.add(delta.tool_calls)
   }
+
+  const calls = toolCalls.result()
+  if (calls.length) yield { type: 'tool_calls', calls }
 }

@@ -18,8 +18,27 @@ export interface Project {
   files: Attachment[]
   /** Résumer les conversations et s'en servir dans les autres. */
   memory: boolean
+  /** Espace : « chat » (défaut, champ absent) ou « code » (agent avec outils, lié à un dossier). */
+  space?: Space
+  /** Projet de code : dossier que l'agent peut lire (chemin absolu choisi dans la fenêtre de macOS). */
+  workspace?: string
   createdAt: number
   updatedAt: number
+}
+
+/** Les deux espaces de l'appli : le chat normal, et le code (mode Agent), comme Claude Code / Codex. */
+export type Space = 'chat' | 'code'
+
+export function projectSpace(project: Pick<Project, 'space'> | undefined): Space {
+  return project?.space === 'code' ? 'code' : 'chat'
+}
+
+/** Espace d'une conversation : celui de son projet (hors projet, ou projet supprimé = chat). */
+export function conversationSpace(
+  conversation: { projectId?: string },
+  getProject: (id: string) => Project | undefined,
+): Space {
+  return conversation.projectId ? projectSpace(getProject(conversation.projectId)) : 'chat'
 }
 
 /** Le résumé d'une conversation, gardé avec elle. */

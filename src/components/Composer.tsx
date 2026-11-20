@@ -1,4 +1,4 @@
-import { ArrowUp, CircleAlert, Eye, FileText, Paperclip, Square, Upload, X } from 'lucide-react'
+import { ArrowUp, Bot, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Appear } from '@/components/Appear'
@@ -13,6 +13,17 @@ import {
   type Attachment,
 } from '@/lib/attachments'
 import { gsap, useMotion } from '@/lib/motion'
+import { folderName, pickWorkspace, type AgentSettings } from '@/lib/agent/tools'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { IS_TAURI } from '@/lib/transport'
+import { cn } from '@/lib/utils'
 
 interface Props {
   onSend: (text: string, attachments: Attachment[]) => void
@@ -23,6 +34,11 @@ interface Props {
   focusKey?: string
   /** false = le modèle choisi ne lit pas les images (null = on ne sait pas). */
   modelReadsImages?: boolean | null
+  /** Espace Code : l'agent et son dossier (null = chat normal). Affiché en lecture seule. */
+  agent?: AgentSettings | null
+  /** Espace Chat : dossier joint en lecture seule, et son changement (absent = option masquée). */
+  folder?: string | null
+  onFolderChange?: (folder: string | null) => void
 }
 
 const MAX_HEIGHT = 200 // px : au-delà, le champ défile au lieu de grandir
@@ -30,7 +46,17 @@ const MAX_HEIGHT = 200 // px : au-delà, le champ défile au lieu de grandir
 // Sur écran tactile, Entrée fait un retour à la ligne (comme ChatGPT mobile) : on envoie avec le bouton.
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
 
-export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, modelReadsImages = null }: Props) {
+export function Composer({
+  onSend,
+  onStop,
+  isStreaming,
+  busy = false,
+  focusKey,
+  modelReadsImages = null,
+  agent = null,
+  folder = null,
+  onFolderChange,
+}: Props) {
   const [value, setValue] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [reading, setReading] = useState(0) // fichiers en cours de lecture
@@ -122,6 +148,35 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
     }
   }, [])
 
+  // ⌘U (Ctrl+U ailleurs) : ajouter des fichiers, comme dans l'appli Claude.
+  const openFilesRef = useRef(() => {})
+  useEffect(() => {
+    openFilesRef.current = () => {
+      if (attachments.length < MAX_ATTACHMENTS) fileRef.current?.click()
+    }
+  })
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'u') return
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return
+      e.preventDefault()
+      openFilesRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  /** Espace Chat : fenêtre « Choisir un dossier » de macOS (chemin vérifié et autorisé côté Rust). */
+  async function chooseFolder() {
+    setFileError(null)
+    try {
+      const picked = await pickWorkspace()
+      if (picked) onFolderChange?.(picked)
+    } catch (e) {
+      setFileError((e as Error).message)
+    }
+  }
+
   const canSend = (value.trim() !== '' || attachments.length > 0) && reading === 0 && !busy
 
   function submit() {
@@ -156,6 +211,31 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
         }}
         className="flex flex-col rounded-3xl border bg-background p-2 shadow-sm transition-colors focus-within:border-ring"
       >
+        {agent && <AgentBar agent={agent} />}
+
+        {folder && onFolderChange && (
+          <div className="flex px-1 pt-1 pb-2">
+            <span
+              className="flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border pr-1 pl-2.5 text-xs"
+              title={`Dossier en lecture seule : ${folder}\nLe modèle peut le lister, le lire et y chercher (sans rien modifier).`}
+            >
+              <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="truncate font-medium">{folderName(folder)}</span>
+              <span className="shrink-0 text-muted-foreground">· lecture seule</span>
+              <button
+                type="button"
+                onClick={() => onFolderChange(null)}
+                disabled={isStreaming}
+                aria-label={`Retirer le dossier « ${folderName(folder)} »`}
+                title="Retirer le dossier"
+                className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50"
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            </span>
+          </div>
+        )}
+
         {(attachments.length > 0 || reading > 0) && (
           <ul aria-label="Fichiers joints" className="flex flex-wrap gap-2 px-1 pt-1 pb-2">
             {attachments.map((a) => (
@@ -179,17 +259,37 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
               e.target.value = '' // pour pouvoir rechoisir le même fichier
             }}
           />
-          <IconButton
-            label="Joindre des fichiers (images, texte, code)"
-            side="top"
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={attachments.length >= MAX_ATTACHMENTS}
-            size="icon-lg"
-            className="rounded-full text-muted-foreground"
-          >
-            <Paperclip className="size-5" aria-hidden />
-          </IconButton>
+          {/* Bouton « + » : un petit menu, comme dans l'appli Claude (fichiers, dossier). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-lg"
+                  aria-label="Ajouter des fichiers ou un dossier"
+                  title="Ajouter des fichiers ou un dossier"
+                  className="rounded-full text-muted-foreground data-[popup-open]:bg-muted"
+                />
+              }
+            >
+              <Plus className="size-5" aria-hidden />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start" className="w-auto min-w-64 whitespace-nowrap">
+              <DropdownMenuItem disabled={attachments.length >= MAX_ATTACHMENTS} onClick={() => fileRef.current?.click()}>
+                <Paperclip aria-hidden />
+                Ajouter des fichiers ou des photos
+                <DropdownMenuShortcut>⌘U</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              {onFolderChange && (
+                <DropdownMenuItem disabled={!IS_TAURI || isStreaming} onClick={() => void chooseFolder()}>
+                  <FolderOpen aria-hidden />
+                  {folder ? 'Changer de dossier' : 'Ajouter un dossier'}
+                  <DropdownMenuShortcut>{IS_TAURI ? 'lecture seule' : 'appli Aery'}</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <textarea
             ref={ref}
             value={value}
@@ -204,7 +304,7 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
               }
             }}
             rows={1}
-            placeholder="Écris ton message…"
+            placeholder={agent ? 'Demande quelque chose à l’agent…' : 'Écris ton message…'}
             aria-label="Message"
             className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-none placeholder:text-muted-foreground"
           />
@@ -257,6 +357,31 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
           <Eye className="size-3.5 shrink-0" aria-hidden />
           Ce modèle ne lit pas les images : Auto choisira un modèle vision pour ce message.
         </p>
+      )}
+    </div>
+  )
+}
+
+/** Espace Code : rappel en lecture seule de ce que l'agent peut faire (le dossier se change dans le projet). */
+function AgentBar({ agent }: { agent: AgentSettings }) {
+  const chip = 'flex h-7 min-w-0 items-center gap-1.5 rounded-full border px-2.5 text-xs'
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-1 pt-1 pb-2">
+      <span className={cn(chip, 'border-primary/30 bg-primary/10 font-medium text-primary')}>
+        <Bot className="size-3.5" aria-hidden />
+        Agent
+      </span>
+      {!IS_TAURI ? (
+        <span className={cn(chip, 'text-muted-foreground')} title="La lecture de fichiers passe par la partie Rust de l’appli Aery.">
+          JavaScript seulement · fichiers dans l’appli Aery
+        </span>
+      ) : agent.workspace ? (
+        <span className={chip} title={`Dossier lu par l’agent : ${agent.workspace}`}>
+          <FolderCode className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="truncate font-medium">{folderName(agent.workspace)}</span>
+        </span>
+      ) : (
+        <span className={cn(chip, 'text-muted-foreground')}>Aucun dossier : choisis-en un dans les réglages du projet</span>
       )}
     </div>
   )

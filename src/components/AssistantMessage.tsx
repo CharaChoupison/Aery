@@ -1,5 +1,6 @@
 import { Brain, ChevronRight, Cpu, Eye, LoaderCircle, Square } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { AgentSteps } from '@/components/AgentSteps'
 import { Appear } from '@/components/Appear'
 import { CopyButton } from '@/components/CopyButton'
 import { Markdown } from '@/components/Markdown'
@@ -20,13 +21,19 @@ export function AssistantMessage({ message: m, streaming, isLast }: Props) {
   const inline = splitThinking(m.content)
   const thinking = [m.reasoning, inline.thinking].filter(Boolean).join('\n\n')
   const answer = inline.answer
-  const thinkingNow = streaming && answer === ''
+  const steps = m.steps ?? []
+  const lastStep = steps.at(-1)
+  const toolRunning = lastStep?.type === 'tool' && lastStep.status === 'running'
+  const thinkingNow = streaming && answer === '' && steps.length === 0
 
   return (
     <div className="group min-w-0 break-words">
       {thinking && <Reasoning text={thinking} active={thinkingNow} />}
 
-      {answer === '' && streaming && !thinking ? (
+      {steps.length > 0 && <AgentSteps steps={steps} streaming={streaming} />}
+
+      {/* Points d'attente : au début, et entre deux étapes de l'agent (le modèle réfléchit à la suite). */}
+      {answer === '' && streaming && !toolRunning && (!thinking || steps.length > 0) ? (
         <Waiting />
       ) : (
         answer && <Markdown content={answer} />

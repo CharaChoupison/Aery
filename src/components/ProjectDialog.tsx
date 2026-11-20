@@ -1,4 +1,4 @@
-import { Brain, CircleAlert, FileText, FolderPlus, Paperclip, X } from 'lucide-react'
+import { Brain, CircleAlert, FileText, FolderCode, FolderPlus, Paperclip, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Group, Row } from '@/components/settings/layout'
 import { Button } from '@/components/ui/button'
@@ -8,13 +8,17 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import type { Conversation } from '@/hooks/useChat'
 import { AttachmentError, formatSize, readAttachment, type Attachment } from '@/lib/attachments'
-import { filesChars, PROJECT_LIMITS, type Project } from '@/lib/projects'
+import { folderName, pickWorkspace } from '@/lib/agent/tools'
+import { filesChars, PROJECT_LIMITS, projectSpace, type Project, type Space } from '@/lib/projects'
+import { IS_TAURI } from '@/lib/transport'
 
-export type ProjectDraft = Pick<Project, 'name' | 'instructions' | 'files' | 'memory'>
+export type ProjectDraft = Pick<Project, 'name' | 'instructions' | 'files' | 'memory' | 'workspace'>
 
 interface Props {
   /** null = création d'un nouveau projet. */
   project: Project | null
+  /** Espace du projet créé (pour un projet existant, on prend le sien). */
+  space?: Space
   conversations: Conversation[]
   onSave: (draft: ProjectDraft) => void
   onClose: () => void
@@ -22,13 +26,27 @@ interface Props {
 }
 
 /** Création / modification d'un projet : nom, instructions, fichiers de référence, mémoire. */
-export function ProjectDialog({ project, conversations, onSave, onClose, onForgetSummary }: Props) {
+export function ProjectDialog({ project, space = 'chat', conversations, onSave, onClose, onForgetSummary }: Props) {
+  const isCode = (project ? projectSpace(project) : space) === 'code'
   const [draft, setDraft] = useState<ProjectDraft>(() => ({
     name: project?.name ?? '',
     instructions: project?.instructions ?? '',
     files: project?.files ?? [],
     memory: project?.memory ?? true,
+    workspace: project?.workspace,
   }))
+  const [folderError, setFolderError] = useState<string | null>(null)
+
+  /** Fenêtre « Choisir un dossier » de macOS : le chemin est vérifié et autorisé côté Rust. */
+  async function chooseFolder() {
+    setFolderError(null)
+    try {
+      const workspace = await pickWorkspace()
+      if (workspace) setDraft((d) => ({ ...d, workspace, name: d.name.trim() ? d.name : folderName(workspace) }))
+    } catch (e) {
+      setFolderError((e as Error).message)
+    }
+  }
   const [fileError, setFileError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const update = (patch: Partial<ProjectDraft>) => setDraft((d) => ({ ...d, ...patch }))
@@ -60,7 +78,9 @@ export function ProjectDialog({ project, conversations, onSave, onClose, onForge
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex max-h-[min(44rem,calc(100dvh-7rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
         <div className="flex h-14 shrink-0 items-center border-b px-5">
-          <DialogTitle className="text-base font-semibold">{project ? 'Modifier le projet' : 'Nouveau projet'}</DialogTitle>
+          <DialogTitle className="text-base font-semibold">
+            {project ? (isCode ? 'Modifier le projet de code' : 'Modifier le projet') : isCode ? 'Nouveau projet de code' : 'Nouveau projet'}
+          </DialogTitle>
           <DialogDescription className="sr-only">Nom, instructions, fichiers de référence et mémoire du projet.</DialogDescription>
         </div>
 
@@ -84,6 +104,40 @@ export function ProjectDialog({ project, conversations, onSave, onClose, onForge
                 className="h-9"
               />
             </Row>
+            {isCode && (
+              <Row
+                label="Dossier"
+                description={
+                  IS_TAURI
+                    ? 'L’agent peut lister, lire et chercher dans ce dossier (lecture seule). Les secrets (.env, clés) et node_modules sont exclus.'
+                    : 'La lecture de fichiers passe par l’appli Aery : ici, l’agent n’a que JavaScript.'
+                }
+                control={
+                  IS_TAURI && (
+                    <Button type="button" variant="outline" className="h-9" onClick={() => void chooseFolder()}>
+                      <FolderCode aria-hidden />
+                      {draft.workspace ? 'Changer' : 'Choisir'}
+                    </Button>
+                  )
+                }
+              >
+                {draft.workspace && (
+                  <p className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm" title={draft.workspace}>
+                    <FolderCode className="size-4 shrink-0 text-primary" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium">{folderName(draft.workspace)}</span>{' '}
+                      <span className="text-muted-foreground">{draft.workspace}</span>
+                    </span>
+                  </p>
+                )}
+                {folderError && (
+                  <p role="alert" className="mt-2 flex gap-1.5 text-xs text-destructive">
+                    <CircleAlert className="size-3.5 shrink-0" aria-hidden />
+                    {folderError}
+                  </p>
+                )}
+              </Row>
+            )}
             <Row label="Instructions" description="Envoyées au modèle dans chaque conversation du projet : le contexte, ce que tu attends de lui.">
               <Textarea
                 value={draft.instructions}
@@ -186,7 +240,7 @@ export function ProjectDialog({ project, conversations, onSave, onClose, onForge
           </Button>
           <Button type="submit" form="project-form" className="h-9 px-4" disabled={!draft.name.trim()}>
             {!project && <FolderPlus aria-hidden />}
-            {project ? 'Enregistrer' : 'Créer le projet'}
+            {project ? 'Enregistrer' : isCode ? 'Créer le projet de code' : 'Créer le projet'}
           </Button>
         </div>
       </DialogContent>

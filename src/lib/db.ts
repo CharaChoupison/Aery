@@ -32,7 +32,8 @@ export async function loadConversations(): Promise<Conversation[]> {
     ...c,
     titleSource: c.titleSource ?? 'auto',
     // Une réponse vide = l'appli a été fermée avant le premier mot : on la retire.
-    messages: c.messages.filter((m) => m.role !== 'assistant' || m.content !== ''),
+    // (sauf si l'agent avait déjà fait des étapes : on les garde)
+    messages: c.messages.filter((m) => m.role !== 'assistant' || m.content !== '' || (m.steps?.length ?? 0) > 0),
   }))
 }
 

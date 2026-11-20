@@ -3,8 +3,18 @@ import { ApiError, chatCompletion, isAbortError, isRouterModel, sendsImages, str
 import { textWithFiles, type Attachment } from '@/lib/attachments'
 import { deleteConversationFromDb, loadConversations, saveConversation } from '@/lib/db'
 import { buildSystemPrompt, getPreferences, samplingParams } from '@/lib/preferences'
-import { buildProjectPrompt, PROJECT_LIMITS, SUMMARY_EVERY, SUMMARY_PROMPT, type ConversationSummary, type Project } from '@/lib/projects'
+import {
+  buildProjectPrompt,
+  PROJECT_LIMITS,
+  projectSpace,
+  SUMMARY_EVERY,
+  SUMMARY_PROMPT,
+  type ConversationSummary,
+  type Project,
+} from '@/lib/projects'
 import { splitThinking } from '@/lib/thinking'
+import { MAX_ROUNDS, runAgent, type AgentStep } from '@/lib/agent/loop'
+import { agentSystemPrompt, type AgentSettings } from '@/lib/agent/tools'
 
 /** Message affiché : un ChatMessage + des infos propres à l'interface. */
 export interface UiMessage extends ChatMessage {
@@ -13,6 +23,7 @@ export interface UiMessage extends ChatMessage {
   model?: string // modèle qui a réellement répondu (utile avec « auto »)
   reasoning?: string // réflexion des modèles « à raisonnement », affichée à part
   note?: string // petite remarque sous la réponse (ex. modèle remplacé pour lire une image)
+  steps?: AgentStep[] // mode Agent : outils appelés avant la réponse
 }
 
 export interface Conversation {
@@ -26,6 +37,8 @@ export interface Conversation {
   projectId?: string
   /** Résumé pour la mémoire du projet. */
   summary?: ConversationSummary
+  /** Espace Chat : dossier joint en lecture seule (l'agent peut le lire). */
+  folder?: string
   messages: UiMessage[]
   createdAt: number
   updatedAt: number
@@ -86,6 +99,27 @@ function writeDefaultModel(model: string): void {
   } catch {
     // tant pis : le choix ne sera simplement pas retenu au prochain lancement
   }
+}
+
+/**
+ * Mode Agent : dans un projet de l'espace Code (avec son dossier), ou dans le Chat quand un dossier
+ * a été joint à la conversation (lecture seule, comme toujours).
+ */
+function agentFor(project: Project | undefined, folder: string | undefined): AgentSettings | undefined {
+  if (project && projectSpace(project) === 'code') return { workspace: project.workspace }
+  return folder ? { workspace: folder } : undefined
+}
+
+/** Contexte d'une réponse, passé par l'appelant (une conversation neuve n'est pas encore dans l'état). */
+interface RunContext {
+  projectId?: string
+  folder?: string
+}
+
+function withoutFolder(c: Conversation): Conversation {
+  const next = { ...c }
+  delete next.folder
+  return next
 }
 
 /**
@@ -155,6 +189,8 @@ export function useChat(options: Options = {}) {
   })
   // Projet de la prochaine conversation (accueil d'un projet ouvert, avant le premier message).
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null)
+  // Dossier joint avant le premier message d'une nouvelle conversation.
+  const [pendingFolder, setPendingFolder] = useState<string | null>(null)
   const summaryPendingRef = useRef(new Set<string>())
 
   // --- Chargement au démarrage ----------------------------------------------------
@@ -265,9 +301,9 @@ export function useChat(options: Options = {}) {
 
   /** Lance une réponse en streaming dans la conversation `convId`, à partir de `history`. */
   const runStream = useCallback(
-    // projectId est passé par l'appelant : pour une conversation toute neuve, elle n'est pas encore
+    // projectId est passé par l'appelant : une conversation toute neuve n'est pas encore
     // dans conversationsRef (mis à jour après le prochain rendu).
-    async (convId: string, history: UiMessage[], model: string, projectId: string | undefined) => {
+    async (convId: string, history: UiMessage[], model: string, { projectId, folder }: RunContext) => {
       const controller = new AbortController()
       abortRef.current = controller
       setStreamingId(convId)
@@ -301,33 +337,57 @@ export function useChat(options: Options = {}) {
 
       let received = ''
       let reasoning = ''
+      let stepCount = 0 // mode Agent : étapes déjà affichées (on les garde même en cas d'erreur)
       try {
         const conv = conversationsRef.current.find((c) => c.id === convId)
         const project = projectId ? getProjectRef.current?.(projectId) : undefined
-        const stream = streamChat(history, {
+        const agent = agentFor(project, folder) // espace Code ou dossier joint : la boucle d'outils
+        const chatOptions = {
           model,
           signal: controller.signal,
-          systemPrompt: systemPromptFor(convId, conversationsRef.current, project),
+          systemPrompt: [systemPromptFor(convId, conversationsRef.current, project), agent && agentSystemPrompt(agent)]
+            .filter(Boolean)
+            .join('\n\n'),
           sampling: samplingParams(prefs),
           historyLimit: prefs.historyLimit,
-        })
-        for await (const event of stream) {
-          if (event.type === 'model') {
-            setAssistant({ model: event.model })
-          } else if (event.type === 'reasoning') {
-            reasoning += event.text
-            setAssistant({ reasoning })
-          } else {
-            received += event.text
-            setAssistant({ content: received })
+        }
+        if (agent) {
+          // Mode Agent : la boucle appelle les outils, puis la réponse finale arrive comme d'habitude.
+          for await (const event of runAgent(history, { ...chatOptions, agent })) {
+            if (event.type === 'model') {
+              setAssistant({ model: event.model })
+            } else if (event.type === 'reasoning') {
+              reasoning += event.text
+              setAssistant({ reasoning })
+            } else if (event.type === 'limit') {
+              setAssistant({ note: `Limite de ${MAX_ROUNDS} tours d’outils atteinte : réponse demandée avec ce qui a été trouvé.` })
+            } else {
+              received = event.content
+              stepCount = event.steps.length
+              setAssistant({ content: received, steps: event.steps })
+            }
+          }
+        } else {
+          for await (const event of streamChat(history, chatOptions)) {
+            if (event.type === 'model') {
+              setAssistant({ model: event.model })
+            } else if (event.type === 'reasoning') {
+              reasoning += event.text
+              setAssistant({ reasoning })
+            } else if (event.type === 'text') {
+              received += event.text
+              setAssistant({ content: received })
+            }
           }
         }
         if (!received) {
           throw new ApiError(
             502,
-            reasoning
-              ? 'Le modèle a réfléchi mais n’a pas écrit de réponse. Réessaie ou choisis un autre modèle.'
-              : 'Le modèle a renvoyé une réponse vide. Réessaie.',
+            stepCount
+              ? 'L’agent s’est arrêté sans écrire de réponse finale. Réessaie ou choisis un autre modèle.'
+              : reasoning
+                ? 'Le modèle a réfléchi mais n’a pas écrit de réponse. Réessaie ou choisis un autre modèle.'
+                : 'Le modèle a renvoyé une réponse vide. Réessaie.',
           )
         }
         // Mémoire du projet : un résumé à la 1re réponse, puis tous les SUMMARY_EVERY messages.
@@ -343,11 +403,11 @@ export function useChat(options: Options = {}) {
         }
       } catch (e) {
         if (isAbortError(e)) {
-          // Stop : on garde ce qui a été reçu. Si rien n'est arrivé, on retire la bulle vide.
-          if (received) setAssistant({ stopped: true })
+          // Stop : on garde ce qui a été reçu (texte ou étapes). Si rien n'est arrivé, on retire la bulle vide.
+          if (received || stepCount) setAssistant({ stopped: true })
           else removeAssistant()
         } else {
-          if (!received) removeAssistant()
+          if (!received && !stepCount) removeAssistant()
           const apiError = e instanceof ApiError ? e : null
           if (apiError?.code === 'no_key') onMissingKeyRef.current?.()
           setError(convId, {
@@ -378,7 +438,10 @@ export function useChat(options: Options = {}) {
       const existing = conversations.find((c) => c.id === activeId)
 
       if (existing) {
-        void runStream(existing.id, [...existing.messages, userMessage], existing.model ?? defaultModel, existing.projectId)
+        void runStream(existing.id, [...existing.messages, userMessage], existing.model ?? defaultModel, {
+          projectId: existing.projectId,
+          folder: existing.folder,
+        })
         return
       }
 
@@ -390,15 +453,17 @@ export function useChat(options: Options = {}) {
         titleSource: 'provisional',
         model: defaultModel,
         ...(pendingProjectId && { projectId: pendingProjectId }),
+        ...(pendingFolder && { folder: pendingFolder }),
         messages: [],
         createdAt: now,
         updatedAt: now,
       }
       setConversations((prev) => [conv, ...prev])
       setActiveId(conv.id)
-      void runStream(conv.id, [userMessage], defaultModel, conv.projectId)
+      setPendingFolder(null)
+      void runStream(conv.id, [userMessage], defaultModel, { projectId: conv.projectId, folder: conv.folder })
     },
-    [activeId, conversations, defaultModel, pendingProjectId, runStream, streamingId],
+    [activeId, conversations, defaultModel, pendingFolder, pendingProjectId, runStream, streamingId],
   )
 
   const stop = useCallback(() => abortRef.current?.abort(), [])
@@ -407,7 +472,7 @@ export function useChat(options: Options = {}) {
     if (!activeId || streamingId) return
     const error = errors[activeId]
     const conv = conversations.find((c) => c.id === activeId)
-    if (error) void runStream(activeId, error.retryHistory, conv?.model ?? defaultModel, conv?.projectId)
+    if (error) void runStream(activeId, error.retryHistory, conv?.model ?? defaultModel, { projectId: conv?.projectId, folder: conv?.folder })
   }, [activeId, conversations, defaultModel, errors, runStream, streamingId])
 
   /** Choisir un modèle : il s'applique à la conversation ouverte ET devient le défaut des nouvelles. */
@@ -420,14 +485,25 @@ export function useChat(options: Options = {}) {
     [activeId, updateConversation],
   )
 
+  /** Dossier en lecture seule (null = le retirer) : sur la conversation ouverte, ou la prochaine. */
+  const setFolder = useCallback(
+    (folder: string | null) => {
+      if (activeId) updateConversation(activeId, (c) => (folder ? { ...c, folder } : withoutFolder(c)))
+      else setPendingFolder(folder)
+    },
+    [activeId, updateConversation],
+  )
+
   /** Nouvelle conversation, éventuellement dans un projet (accueil du projet). */
   const newConversation = useCallback((projectId: string | null = null) => {
     setActiveId(null)
     setPendingProjectId(projectId)
+    setPendingFolder(null)
   }, [])
   const selectConversation = useCallback((id: string) => {
     setActiveId(id)
     setPendingProjectId(null)
+    setPendingFolder(null)
   }, [])
 
   /** Range une conversation dans un projet (null = la sortir du projet). */
@@ -491,6 +567,9 @@ export function useChat(options: Options = {}) {
     selectedModel: active?.model ?? defaultModel,
     /** Projet ouvert : celui de la conversation, ou celui de l'accueil de projet. */
     activeProjectId: active ? (active.projectId ?? null) : pendingProjectId,
+    /** Dossier joint (lecture seule) de la conversation ouverte, ou de la prochaine. */
+    folder: active ? (active.folder ?? null) : pendingFolder,
+    setFolder,
     setModel,
     send,
     stop,
