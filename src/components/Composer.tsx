@@ -1,5 +1,7 @@
-import { ArrowUp, CircleAlert, Eye, FileText, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, CircleAlert, Eye, FileText, Paperclip, Square, Upload, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Appear } from '@/components/Appear'
 import { IconButton } from '@/components/IconButton'
 import {
   ACCEPT,
@@ -11,7 +13,6 @@ import {
   type Attachment,
 } from '@/lib/attachments'
 import { gsap, useMotion } from '@/lib/motion'
-import { cn } from '@/lib/utils'
 
 interface Props {
   onSend: (text: string, attachments: Attachment[]) => void
@@ -77,6 +78,50 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
     }
   }
 
+  // Glisser-déposer n'importe où dans la fenêtre (pas seulement sur la zone de saisie).
+  // Dans l'appli Tauri, il faut "dragDropEnabled": false (tauri.conf.json), sinon macOS donne
+  // les fichiers à Tauri et la page ne reçoit jamais l'événement « drop ».
+  const addFilesRef = useRef(addFiles)
+  useEffect(() => {
+    addFilesRef.current = addFiles
+  })
+  useEffect(() => {
+    let depth = 0 // dragenter/dragleave se déclenchent pour chaque élément survolé : on compte
+    const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false
+    // Une fenêtre (Paramètres, projet…) est ouverte : on la laisse tranquille.
+    const blocked = () => document.querySelector('[role="dialog"], [role="alertdialog"]') !== null
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e) || blocked()) return
+      depth++
+      setDragging(true)
+    }
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) setDragging(false)
+    }
+    const onOver = (e: DragEvent) => {
+      if (hasFiles(e) && !blocked()) e.preventDefault() // sans ça, le navigateur ouvrirait le fichier
+    }
+    const onDrop = (e: DragEvent) => {
+      depth = 0
+      setDragging(false)
+      if (!hasFiles(e) || blocked()) return
+      e.preventDefault()
+      void addFilesRef.current([...(e.dataTransfer?.files ?? [])])
+    }
+    window.addEventListener('dragenter', onEnter)
+    window.addEventListener('dragleave', onLeave)
+    window.addEventListener('dragover', onOver)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragenter', onEnter)
+      window.removeEventListener('dragleave', onLeave)
+      window.removeEventListener('dragover', onOver)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [])
+
   const canSend = (value.trim() !== '' || attachments.length > 0) && reading === 0 && !busy
 
   function submit() {
@@ -109,24 +154,7 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
           e.preventDefault()
           submit()
         }}
-        onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes('Files')) return
-          e.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
-        }}
-        onDrop={(e) => {
-          if (!e.dataTransfer.files.length) return
-          e.preventDefault()
-          setDragging(false)
-          void addFiles([...e.dataTransfer.files])
-        }}
-        className={cn(
-          'flex flex-col rounded-3xl border bg-background p-2 shadow-sm transition-colors focus-within:border-ring',
-          dragging && 'border-primary bg-primary/5',
-        )}
+        className="flex flex-col rounded-3xl border bg-background p-2 shadow-sm transition-colors focus-within:border-ring"
       >
         {(attachments.length > 0 || reading > 0) && (
           <ul aria-label="Fichiers joints" className="flex flex-wrap gap-2 px-1 pt-1 pb-2">
@@ -157,6 +185,7 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
             type="button"
             onClick={() => fileRef.current?.click()}
             disabled={attachments.length >= MAX_ATTACHMENTS}
+            size="icon-lg"
             className="rounded-full text-muted-foreground"
           >
             <Paperclip className="size-5" aria-hidden />
@@ -175,7 +204,7 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
               }
             }}
             rows={1}
-            placeholder={dragging ? 'Dépose tes fichiers ici' : 'Écris ton message…'}
+            placeholder="Écris ton message…"
             aria-label="Message"
             className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-none placeholder:text-muted-foreground"
           />
@@ -198,6 +227,24 @@ export function Composer({ onSend, onStop, isStreaming, busy = false, focusKey, 
           )}
         </div>
       </form>
+
+      {/* Voile affiché pendant qu'on fait glisser des fichiers au-dessus de la fenêtre. */}
+      {dragging &&
+        createPortal(
+          <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-6 backdrop-blur-sm">
+            <Appear
+              from={{ autoAlpha: 0, scale: 0.94, ease: 'back.out(1.7)' }}
+              className="flex flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-primary/60 bg-background px-12 py-10 text-center shadow-lg"
+            >
+              <span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <Upload className="size-6" aria-hidden />
+              </span>
+              <p className="font-medium">Dépose tes fichiers ici</p>
+              <p className="text-sm text-muted-foreground">Images ou fichiers texte (code, Markdown, CSV…)</p>
+            </Appear>
+          </div>,
+          document.body,
+        )}
 
       {fileError && (
         <p role="alert" className="flex items-center gap-1.5 px-3 text-xs text-destructive">
