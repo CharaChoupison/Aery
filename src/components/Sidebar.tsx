@@ -1,6 +1,4 @@
 import {
-  Boxes,
-  ChartColumn,
   CircleArrowUp,
   CircleAlert,
   LoaderCircle,
@@ -11,7 +9,6 @@ import {
   SquarePen,
   Trash2,
 } from 'lucide-react'
-import type { View } from '@/App'
 import { AeryLogo } from '@/components/AeryLogo'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -49,9 +46,6 @@ interface Props {
   onOpenSettings: () => void
   /** Ouvre les Paramètres sur la page « Mises à jour ». */
   onOpenUpdates: () => void
-  /** Page affichée (chat, Modèles, Analytique) et navigation entre elles. */
-  view: View
-  onNavigate: (view: View) => void
   /** Bouton « replier » : seulement sur grand écran (sur mobile, le panneau se ferme tout seul). */
   onCollapse?: () => void
   /** Appli macOS : les boutons de fenêtre sont posés sur le haut de la barre, on leur laisse la place. */
@@ -88,7 +82,7 @@ function groupByDate(conversations: Conversation[]): { label: string; items: Con
 // --- La barre latérale ---------------------------------------------------------------
 
 export function Sidebar(props: Props) {
-  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, view, onNavigate, trafficLights, nav } = props
+  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, trafficLights, nav } = props
   const updates = useUpdates()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const motion = useMotion()
@@ -136,24 +130,6 @@ export function Sidebar(props: Props) {
           <SquarePen className="size-4" aria-hidden />
           Nouvelle conversation
         </Button>
-        {/* Pages de statistiques FreeLLMAPI (lecture seule) */}
-        {(
-          [
-            { id: 'models', label: 'Modèles', icon: Boxes },
-            { id: 'analytics', label: 'Analytique', icon: ChartColumn },
-          ] as const
-        ).map(({ id, label, icon: Icon }) => (
-          <Button
-            key={id}
-            variant="ghost"
-            aria-current={view === id ? 'page' : undefined}
-            className={cn('h-9 w-full justify-start gap-2 px-2', view === id && 'bg-sidebar-accent font-medium')}
-            onClick={() => onNavigate(id)}
-          >
-            <Icon className="size-4" aria-hidden />
-            {label}
-          </Button>
-        ))}
       </div>
 
       <nav ref={navRef} aria-label="Conversations" className="flex-1 overflow-y-auto px-2 py-3">
@@ -246,7 +222,6 @@ function ConversationItem({
   onRename,
   onAskDelete,
   animateIn,
-  view,
 }: Props & { conversation: Conversation; onAskDelete: (c: Conversation) => void; animateIn: boolean }) {
   const [renaming, setRenaming] = useState(false)
   const itemRef = useRef<HTMLLIElement>(null)
@@ -259,7 +234,7 @@ function ConversationItem({
   })
   const [draft, setDraft] = useState(c.title)
   const inputRef = useRef<HTMLInputElement>(null)
-  const isActive = c.id === activeId && view === 'chat' // sur une page de stats, aucune conversation n'est « ouverte »
+  const isActive = c.id === activeId
 
   useEffect(() => {
     if (renaming) inputRef.current?.select() // sélectionne le titre pour le remplacer d'un coup

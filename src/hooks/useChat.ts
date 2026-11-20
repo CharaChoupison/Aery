@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, chatCompletion, isAbortError, streamChat, type ChatMessage } from '@/lib/api'
+import { ApiError, chatCompletion, isAbortError, isRouterModel, sendsImages, streamChat, type ChatMessage } from '@/lib/api'
+import { textWithFiles, type Attachment } from '@/lib/attachments'
 import { deleteConversationFromDb, loadConversations, saveConversation } from '@/lib/db'
-import { getPreferences, samplingParams } from '@/lib/preferences'
+import { buildSystemPrompt, getPreferences, samplingParams } from '@/lib/preferences'
 
 /** Message affiché : un ChatMessage + des infos propres à l'interface. */
 export interface UiMessage extends ChatMessage {
@@ -9,6 +10,7 @@ export interface UiMessage extends ChatMessage {
   stopped?: boolean // réponse interrompue par le bouton Stop
   model?: string // modèle qui a réellement répondu (utile avec « auto »)
   reasoning?: string // réflexion des modèles « à raisonnement », affichée à part
+  note?: string // petite remarque sous la réponse (ex. modèle remplacé pour lire une image)
 }
 
 export interface Conversation {
@@ -84,7 +86,18 @@ function writeDefaultModel(model: string): void {
  * Tout l'état du chat : conversations, conversation ouverte, streaming en cours,
  * et la sauvegarde automatique dans IndexedDB.
  */
-export function useChat(options: { onMissingKey?: () => void } = {}) {
+interface Options {
+  onMissingKey?: () => void
+  /** true / false si on sait si ce modèle lit les images, null si on ne sait pas. */
+  isVisionModel?: (modelId: string) => boolean | null
+}
+
+/** Texte qui résume un message pour un titre : son contenu, sinon le nom des fichiers joints. */
+function summaryText(m: Pick<ChatMessage, 'content' | 'attachments'>): string {
+  return m.content.trim() || (m.attachments ?? []).map((a) => a.name).join(', ')
+}
+
+export function useChat(options: Options = {}) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [loaded, setLoaded] = useState(false)
   const [storageError, setStorageError] = useState<string | null>(null)
@@ -107,8 +120,10 @@ export function useChat(options: { onMissingKey?: () => void } = {}) {
 
   // On garde la dernière version du callback dans une ref (mise à jour après chaque rendu).
   const onMissingKeyRef = useRef(options.onMissingKey)
+  const isVisionRef = useRef(options.isVisionModel)
   useEffect(() => {
     onMissingKeyRef.current = options.onMissingKey
+    isVisionRef.current = options.isVisionModel
   })
 
   // --- Chargement au démarrage ----------------------------------------------------
@@ -193,11 +208,22 @@ export function useChat(options: { onMissingKey?: () => void } = {}) {
       setStreamingId(convId)
       setError(convId, null)
 
+      // Réglages lus au moment de l'envoi : un changement dans les Paramètres vaut dès la réponse suivante.
+      const prefs = getPreferences()
+
+      // Une image à lire, mais le modèle choisi n'est pas un modèle « vision » : on laisse le routeur
+      // (auto) choisir un modèle qui sait lire les images, pour ce message seulement.
+      let note: string | undefined
+      if (!isRouterModel(model) && sendsImages(history, prefs.historyLimit) && isVisionRef.current?.(model) === false) {
+        note = `« ${model} » ne lit pas les images : réponse confiée à Auto, qui a choisi un modèle vision.`
+        model = 'auto'
+      }
+
       const assistantId = newId()
       // Bulle vide pour l'assistant, remplie au fil du flux.
       updateConversation(convId, (c) => ({
         ...c,
-        messages: [...history, { id: assistantId, role: 'assistant', content: '' }],
+        messages: [...history, { id: assistantId, role: 'assistant', content: '', note }],
         updatedAt: Date.now(),
       }))
 
@@ -211,12 +237,10 @@ export function useChat(options: { onMissingKey?: () => void } = {}) {
       let received = ''
       let reasoning = ''
       try {
-        // Réglages lus au moment de l'envoi : un changement dans les Paramètres vaut dès la réponse suivante.
-        const prefs = getPreferences()
         const stream = streamChat(history, {
           model,
           signal: controller.signal,
-          systemPrompt: prefs.systemPrompt,
+          systemPrompt: buildSystemPrompt(prefs),
           sampling: samplingParams(prefs),
           historyLimit: prefs.historyLimit,
         })
@@ -243,7 +267,8 @@ export function useChat(options: { onMissingKey?: () => void } = {}) {
         const conv = conversationsRef.current.find((c) => c.id === convId)
         const firstUser = history.find((m) => m.role === 'user')
         if (conv?.titleSource === 'provisional' && firstUser && getPreferences().autoTitle) {
-          void generateTitle(convId, firstUser.content)
+          // Le titre se base sur le texte (et le début des fichiers texte), pas sur les images.
+          void generateTitle(convId, textWithFiles(firstUser.content, firstUser.attachments) || summaryText(firstUser))
         }
       } catch (e) {
         if (isAbortError(e)) {
@@ -269,11 +294,16 @@ export function useChat(options: { onMissingKey?: () => void } = {}) {
   )
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, attachments: Attachment[] = []) => {
       const content = text.trim()
-      if (!content || streamingId) return
+      if ((!content && attachments.length === 0) || streamingId) return
 
-      const userMessage: UiMessage = { id: newId(), role: 'user', content }
+      const userMessage: UiMessage = {
+        id: newId(),
+        role: 'user',
+        content,
+        ...(attachments.length > 0 && { attachments }),
+      }
       const existing = conversations.find((c) => c.id === activeId)
 
       if (existing) {
@@ -285,7 +315,7 @@ export function useChat(options: { onMissingKey?: () => void } = {}) {
       const now = Date.now()
       const conv: Conversation = {
         id: newId(),
-        title: provisionalTitle(content),
+        title: provisionalTitle(summaryText(userMessage)),
         titleSource: 'provisional',
         model: defaultModel,
         messages: [],

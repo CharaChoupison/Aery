@@ -1,12 +1,13 @@
 import { Eye, KeyRound, Route, Search, Wrench } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { Appear } from '@/components/Appear'
-import { Badge, Card, ErrorNotice, PageHeader, RefreshButton, Segmented } from '@/components/page'
+import { Badge, Card, ErrorNotice, RefreshButton, Segmented } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useAdminData } from '@/hooks/useAdminData'
-import { formatContext, getChain, getRouting, STRATEGY_LABELS, type ChainModel, type ModelScore } from '@/lib/admin'
+import { formatContext, getChain, getRouting, setModelsEnabled, STRATEGY_LABELS, type ChainModel, type ModelScore } from '@/lib/admin'
+import { ApiError } from '@/lib/api'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 
@@ -84,7 +85,8 @@ function limitLabel(m: ChainModel): string | null {
 
 const percent = (n: number) => `${Math.round(n * 100)} %`
 
-export function ModelsPage() {
+/** Modèles de la chaîne de repli, avec un interrupteur pour activer / désactiver chacun. */
+export function ModelsPage({ onChanged }: { onChanged?: () => void }) {
   const chain = useAdminData((signal) => getChain(signal), [])
   const routing = useAdminData((signal) => getRouting(signal), [])
   const [query, setQuery] = useState('')
@@ -93,12 +95,42 @@ export function ModelsPage() {
   const [context, setContext] = useState<ContextFilter>('all')
   const [withoutKey, setWithoutKey] = useState(false)
   const [shown, setShown] = useState(PAGE_SIZE)
+  // Changements en attente de confirmation par FreeLLMAPI (affichés tout de suite : mise à jour « optimiste »).
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  const [toggleError, setToggleError] = useState<string | null>(null)
 
   // On fusionne : la liste des modèles (limites, contexte…) + les scores du routeur.
   const rows = useMemo(
-    () => buildRows(chain.data ?? [], routing.data?.scores ?? [], withoutKey),
-    [chain.data, routing.data, withoutKey],
+    () =>
+      buildRows(chain.data ?? [], routing.data?.scores ?? [], withoutKey).map((r) =>
+        r.key in pending ? { ...r, enabled: pending[r.key] } : r,
+      ),
+    [chain.data, routing.data, withoutKey, pending],
   )
+
+  async function toggle(row: Row, enabled: boolean) {
+    setToggleError(null)
+    setPending((p) => ({ ...p, [row.key]: enabled }))
+    try {
+      // Un même modèle servi par plusieurs fournisseurs : on les active / désactive tous.
+      await setModelsEnabled(row.members, enabled)
+      chain.reload()
+      onChanged?.()
+    } catch (e) {
+      setToggleError(e instanceof ApiError ? e.message : 'Modification impossible.')
+    } finally {
+      // On attend un peu le rechargement de la liste avant de retirer la valeur provisoire.
+      setTimeout(
+        () =>
+          setPending((p) => {
+            const next = { ...p }
+            delete next[row.key]
+            return next
+          }),
+        800,
+      )
+    }
+  }
 
   const q = query.trim().toLowerCase()
   const visible = rows.filter(
@@ -115,11 +147,12 @@ export function ModelsPage() {
   const weights = routing.data?.weights
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <PageHeader
-        title="Modèles"
-        description="Les modèles de ta chaîne de repli FreeLLMAPI, classés par le routeur selon un score qui combine fiabilité, vitesse et intelligence, mesurées sur le trafic réel."
-      >
+    <div className="flex flex-col gap-5">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-sm text-muted-foreground">
+          Les modèles de ta chaîne de repli FreeLLMAPI, classés par le routeur selon un score qui combine fiabilité, vitesse et
+          intelligence, mesurées sur le trafic réel. Désactive ceux que tu ne veux pas voir utilisés (Auto les évitera aussi).
+        </p>
         <RefreshButton
           loading={loading}
           onClick={() => {
@@ -127,9 +160,10 @@ export function ModelsPage() {
             routing.reload()
           }}
         />
-      </PageHeader>
+      </div>
 
       {error && <ErrorNotice message={error} onRetry={() => (chain.reload(), routing.reload())} />}
+      {toggleError && <ErrorNotice message={toggleError} />}
 
       {routing.data && weights && (
         <Appear>
@@ -150,7 +184,7 @@ export function ModelsPage() {
               </p>
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
-              Lecture seule : pour changer de stratégie ou activer un modèle, passe par le dashboard de FreeLLMAPI.
+              Pour changer de stratégie ou l’ordre de la chaîne, passe par le dashboard de FreeLLMAPI.
             </p>
           </Card>
         </Appear>
@@ -197,7 +231,7 @@ export function ModelsPage() {
         </label>
       </div>
 
-      <ModelsTable rows={visible.slice(0, shown)} />
+      <ModelsTable rows={visible.slice(0, shown)} onToggle={(row, enabled) => void toggle(row, enabled)} />
       {visible.length > shown && (
         <Button variant="outline" className="self-center" onClick={() => setShown((n) => n + PAGE_SIZE)}>
           Afficher plus ({visible.length - shown} restants)
@@ -234,7 +268,7 @@ function FilterToggle({
   )
 }
 
-function ModelsTable({ rows }: { rows: Row[] }) {
+function ModelsTable({ rows, onToggle }: { rows: Row[]; onToggle: (row: Row, enabled: boolean) => void }) {
   const ref = useRef<HTMLTableSectionElement>(null)
   const motion = useMotion()
   const signature = rows.map((r) => r.key).join(',')
@@ -253,7 +287,7 @@ function ModelsTable({ rows }: { rows: Row[] }) {
 
   return (
     <div className="overflow-x-auto rounded-2xl border bg-card">
-      <table className="w-full min-w-[56rem] text-sm">
+      <table className="w-full min-w-[46rem] text-sm">
         <thead className="border-b text-left text-xs text-muted-foreground">
           <tr>
             <th scope="col" className="w-10 py-3 pl-4 font-medium">
@@ -263,7 +297,7 @@ function ModelsTable({ rows }: { rows: Row[] }) {
               Modèle
             </th>
             {AXES.map((a) => (
-              <th key={a.key} scope="col" className="w-36 py-3 pr-4 font-medium">
+              <th key={a.key} scope="col" className="w-28 py-3 pr-4 font-medium">
                 <span className="flex items-center gap-1.5">
                   <span className="size-2 rounded-full" style={{ background: a.color }} aria-hidden />
                   {a.label}
@@ -274,7 +308,7 @@ function ModelsTable({ rows }: { rows: Row[] }) {
               Score
             </th>
             <th scope="col" className="w-24 py-3 pr-4 text-right font-medium">
-              Statut
+              Actif
             </th>
           </tr>
         </thead>
@@ -292,9 +326,9 @@ function ModelsTable({ rows }: { rows: Row[] }) {
             const limit = limitLabel(m)
             const providers = [...new Set(r.members.map((x) => x.platform))]
             return (
-              <tr key={r.key} className={cn('border-b last:border-0 hover:bg-muted/40', !r.enabled && 'opacity-60')}>
-                <td className="py-3 pl-4 text-muted-foreground tabular-nums">{r.rank}</td>
-                <td className="py-3 pr-4">
+              <tr key={r.key} className="border-b last:border-0 hover:bg-muted/40">
+                <td className={cn('py-3 pl-4 text-muted-foreground tabular-nums', !r.enabled && 'opacity-60')}>{r.rank}</td>
+                <td className={cn('py-3 pr-4', !r.enabled && 'opacity-60')}>
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="font-medium" title={r.members.map((x) => `${x.platform} : ${x.modelId}`).join('\n')}>
                       {r.label}
@@ -323,7 +357,7 @@ function ModelsTable({ rows }: { rows: Row[] }) {
                 ))}
                 <td className="py-3 pr-4 text-right font-mono tabular-nums">{m.scores ? m.scores.score.toFixed(3) : '–'}</td>
                 <td className="py-3 pr-4 text-right">
-                  <StatusBadge row={r} />
+                  <ToggleCell row={r} onToggle={onToggle} />
                 </td>
               </tr>
             )
@@ -346,14 +380,16 @@ function ScoreBar({ value, color }: { value: number; color: string }) {
   )
 }
 
-function StatusBadge({ row }: { row: Row }) {
+/** Interrupteur d'un modèle, ou la raison pour laquelle il ne peut pas servir. */
+function ToggleCell({ row, onToggle }: { row: Row; onToggle: (row: Row, enabled: boolean) => void }) {
   if (row.members.every((m) => m.retiredUpstream)) return <Badge>Retiré</Badge>
   if (row.members.every((m) => m.keyCount === 0)) return <Badge>Sans clé</Badge>
-  if (!row.enabled) return <Badge>Inactif</Badge>
   return (
-    <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
-      <span className="size-1.5 rounded-full bg-current" aria-hidden />
-      Actif
-    </Badge>
+    <Switch
+      checked={row.enabled}
+      onCheckedChange={(enabled) => onToggle(row, enabled)}
+      aria-label={`${row.enabled ? 'Désactiver' : 'Activer'} ${row.label}`}
+      title={row.enabled ? 'Actif : le routeur peut l’utiliser' : 'Désactivé : jamais utilisé'}
+    />
   )
 }

@@ -3,6 +3,7 @@
 //  - appli Tauri : la partie Rust (commandes get_settings, save_settings, proxy_request)
 // transport.ts choisit automatiquement le bon chemin.
 
+import { hasImages, toContent, type Attachment } from './attachments'
 import { readSSE } from './sse'
 import { splitThinking } from './thinking'
 import { appFetch, invokeCommand, IS_TAURI } from './transport'
@@ -12,6 +13,8 @@ export type Role = 'system' | 'user' | 'assistant'
 export interface ChatMessage {
   role: Role
   content: string
+  /** Images et fichiers texte joints (messages de l'utilisateur). */
+  attachments?: Attachment[]
 }
 
 export interface Settings {
@@ -44,6 +47,12 @@ async function toApiError(res: Response): Promise<ApiError> {
   }
 
   if (code === 'no_key' || code === 'forbidden_origin') return new ApiError(res.status, message, code)
+  if (code === 'no_vision_model')
+    return new ApiError(
+      res.status,
+      'Aucun modèle capable de lire les images n’est activé. Active-en un dans Paramètres › Modèles (filtre Vision).',
+      code,
+    )
   if (res.status === 401 || res.status === 403)
     message = 'Clé FreeLLMAPI refusée. Vérifie-la dans les Paramètres.'
   else if (res.status === 429)
@@ -197,12 +206,29 @@ export interface ChatOptions {
   historyLimit?: number
 }
 
+/** Les images ne sont envoyées que pour les N derniers messages qui en ont (sinon la requête devient énorme). */
+const IMAGE_MESSAGES_SENT = 2
+
+/** Messages réellement envoyés au modèle (les plus récents). */
+export function sentHistory<T extends ChatMessage>(messages: T[], historyLimit = MAX_HISTORY): T[] {
+  return messages.slice(-historyLimit)
+}
+
+/** true si la requête contiendra au moins une image (il faudra un modèle « vision »). */
+export function sendsImages(messages: ChatMessage[], historyLimit?: number): boolean {
+  return sentHistory(messages, historyLimit).some((m) => m.role === 'user' && hasImages(m.attachments))
+}
+
 /** Corps de requête commun. On ne garde que role + content (pas les champs propres à l'UI). */
 function completionBody(messages: ChatMessage[], options: ChatOptions, stream: boolean): string {
-  // La réflexion <think>…</think> d'une ancienne réponse ne sert à rien au modèle : on économise le contexte.
-  const history = messages.slice(-(options.historyLimit ?? MAX_HISTORY)).map(({ role, content }) => ({
+  const recent = sentHistory(messages, options.historyLimit)
+  const withImages = recent.flatMap((m, i) => (m.role === 'user' && hasImages(m.attachments) ? [i] : []))
+  const keepImages = new Set(withImages.slice(-IMAGE_MESSAGES_SENT))
+  const history = recent.map(({ role, content, attachments }, i) => ({
     role,
-    content: role === 'assistant' ? splitThinking(content).answer || content : content,
+    // La réflexion <think>…</think> d'une ancienne réponse ne sert à rien au modèle : on économise le contexte.
+    content:
+      role === 'assistant' ? splitThinking(content).answer || content : toContent(content, attachments, keepImages.has(i)),
   }))
   const system = options.systemPrompt?.trim()
   return JSON.stringify({

@@ -1,4 +1,4 @@
-import { Brain, ChevronRight, Cpu, LoaderCircle, Square } from 'lucide-react'
+import { Brain, ChevronRight, Cpu, Eye, LoaderCircle, Square } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { CopyButton } from '@/components/CopyButton'
@@ -30,6 +30,13 @@ export function AssistantMessage({ message: m, streaming, isLast }: Props) {
         <Waiting />
       ) : (
         answer && <Markdown content={answer} />
+      )}
+
+      {m.note && (
+        <span className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Eye className="mt-px size-3 shrink-0" aria-hidden />
+          {m.note}
+        </span>
       )}
 
       {m.stopped && (

@@ -17,7 +17,7 @@ import { useState } from 'react'
 import { AnimatedNumber } from '@/components/AnimatedNumber'
 import { Appear } from '@/components/Appear'
 import { BarChart, type Bucket } from '@/components/charts/BarChart'
-import { Card, ErrorNotice, PageHeader, RefreshButton, Segmented } from '@/components/page'
+import { Card, ErrorNotice, RefreshButton, Segmented } from '@/components/page'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAdminData } from '@/hooks/useAdminData'
 import {
@@ -43,13 +43,9 @@ export function AnalyticsPage() {
   const [refreshKey, setRefreshKey] = useState(0) // bouton Actualiser : remonte l'onglet ouvert
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <PageHeader title="Analytique" description="Volume de requêtes, latence, consommation de tokens, échecs et journaux de FreeLLMAPI.">
-        {tab !== 'logs' && <Segmented label="Période" value={range} onChange={setRange} options={RANGES} />}
-        <RefreshButton loading={false} onClick={() => setRefreshKey((k) => k + 1)} />
-      </PageHeader>
-
+    <div className="flex flex-col gap-4">
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
         <TabsList>
           <TabsTrigger value="overview" className="px-3">
             <ChartColumn aria-hidden />
@@ -64,6 +60,11 @@ export function AnalyticsPage() {
             Journaux
           </TabsTrigger>
         </TabsList>
+          <div className="flex flex-wrap items-center gap-2">
+            {tab !== 'logs' && <Segmented label="Période" value={range} onChange={setRange} options={RANGES} size="sm" />}
+            <RefreshButton loading={false} onClick={() => setRefreshKey((k) => k + 1)} />
+          </div>
+        </div>
         <TabsContent value="overview">
           <Overview key={refreshKey} range={range} />
         </TabsContent>
@@ -96,7 +97,7 @@ function Overview({ range }: { range: Range }) {
       {error && <ErrorNotice message={error} onRetry={() => (summary.reload(), timeline.reload())} />}
 
       {s && (
-        <Appear stagger={0.04} className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Appear stagger={0.04} className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat label="Requêtes" icon={Activity} value={s.totalRequests} format={(n) => formatNumber(Math.round(n))} />
           <Stat
             label="Taux de réussite"
@@ -119,7 +120,7 @@ function Overview({ range }: { range: Range }) {
         </Appear>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-2">
         <Card title="Requêtes au fil du temps" icon={ChartColumn}>
           {requestBuckets ? (
             <BarChart
@@ -150,7 +151,7 @@ function Overview({ range }: { range: Range }) {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
         <Card title="Par modèle" icon={Layers} className="min-w-0">
           {byModel.data?.length === 0 && <Empty />}
           {byModel.data && byModel.data.length > 0 && (

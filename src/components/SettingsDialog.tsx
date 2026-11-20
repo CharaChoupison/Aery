@@ -1,10 +1,14 @@
 import {
+  Boxes,
+  ChartColumn,
   CircleAlert,
   CircleArrowUp,
   CircleCheck,
   Eye,
   EyeOff,
+  Gauge,
   Info,
+  KeyRound,
   LoaderCircle,
   Monitor,
   Moon,
@@ -16,17 +20,22 @@ import {
   SlidersHorizontal,
   Sun,
   Trash2,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { Appear } from '@/components/Appear'
+import { KeysPage } from '@/components/settings/KeysPage'
+import { Group, Notice, Row, SelectControl } from '@/components/settings/layout'
+import { ProfilePage } from '@/components/settings/ProfilePage'
+import { UsagePage } from '@/components/settings/UsagePage'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
+import { AnalyticsPage } from '@/pages/AnalyticsPage'
+import { ModelsPage } from '@/pages/ModelsPage'
 import { ApiError, listModels, saveSettings, type Settings } from '@/lib/api'
 import { useMotion } from '@/lib/motion'
 import {
@@ -45,7 +54,7 @@ import { IS_TAURI } from '@/lib/transport'
 import { CAN_UPDATE, checkForUpdates, startUpdate, useUpdates } from '@/lib/updates'
 import { cn } from '@/lib/utils'
 
-export type SettingsTab = 'general' | 'model' | 'connection' | 'updates'
+export type SettingsTab = 'general' | 'profile' | 'model' | 'connection' | 'models' | 'keys' | 'usage' | 'analytics' | 'updates'
 
 interface Props {
   open: boolean
@@ -54,10 +63,12 @@ interface Props {
   settings: Settings | null
   onClose: () => void
   onSaved: (settings: Settings) => void
+  /** Modèles activés / désactivés ou clés modifiées : la liste du sélecteur de modèle a pu changer. */
+  onModelsChanged: () => void
 }
 
 /** Les pages de la navigation, avec des mots-clés pour la recherche. */
-const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; keywords: string }[] = [
+const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; keywords: string; wide?: boolean }[] = [
   {
     id: 'general',
     label: 'Général',
@@ -66,20 +77,45 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; 
     keywords: 'apparence thème sombre clair système largeur conversation animations accessibilité mouvement titre',
   },
   {
+    id: 'profile',
+    label: 'Personnalisation',
+    icon: UserRound,
+    group: 'Préférences',
+    keywords: 'profil nom prénom pronoms tutoiement vouvoiement métier à propos style ton chaleur enthousiasme émojis titres listes instructions prompt système',
+  },
+  {
     id: 'model',
-    label: 'Modèle',
+    label: 'Génération',
     icon: SlidersHorizontal,
     group: 'Préférences',
-    keywords: 'prompt système instructions température top p max tokens échantillonnage historique mémoire messages',
+    keywords: 'réglages du modèle température top p max tokens échantillonnage historique mémoire messages',
   },
-  { id: 'connection', label: 'Connexion', icon: PlugZap, group: 'FreeLLMAPI', keywords: 'clé api port freellmapi tester statistiques' },
+  { id: 'connection', label: 'Connexion', icon: PlugZap, group: 'FreeLLMAPI', keywords: 'clé api port freellmapi tester' },
+  {
+    id: 'models',
+    label: 'Modèles',
+    icon: Boxes,
+    group: 'FreeLLMAPI',
+    keywords: 'modèles activer désactiver chaîne repli routeur score fiabilité vitesse intelligence vision',
+    wide: true,
+  },
+  { id: 'keys', label: 'Clés des fournisseurs', icon: KeyRound, group: 'FreeLLMAPI', keywords: 'ajouter clé fournisseur groq google openrouter supprimer' },
+  { id: 'usage', label: 'Utilisation', icon: Gauge, group: 'FreeLLMAPI', keywords: 'utilisation quota limite consommation tokens requêtes budget mois jour' },
+  {
+    id: 'analytics',
+    label: 'Analytique',
+    icon: ChartColumn,
+    group: 'FreeLLMAPI',
+    keywords: 'statistiques analytique requêtes latence journaux logs erreurs',
+    wide: true,
+  },
   // Mises à jour : seulement dans l'appli (elles reconstruisent l'appli depuis le repo git).
   ...(IS_TAURI
     ? [{ id: 'updates' as const, label: 'Mises à jour', icon: CircleArrowUp, group: 'Application', keywords: 'mise à jour version git github installer redémarrer nouveautés' }]
     : []),
 ]
 
-export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSaved }: Props) {
+export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSaved, onModelsChanged }: Props) {
   const [query, setQuery] = useState('')
   const q = query.trim().toLowerCase()
   const pages = PAGES.filter((p) => !q || `${p.label} ${p.keywords}`.toLowerCase().includes(q))
@@ -96,15 +132,17 @@ export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSa
         }
       }}
     >
-      <DialogContent className="flex h-[min(44rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
+      <DialogContent className="flex h-[min(46rem,calc(100dvh-7rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
         <div className="flex h-14 shrink-0 items-center border-b px-5">
           <DialogTitle className="text-base font-semibold">Paramètres</DialogTitle>
-          <DialogDescription className="sr-only">Apparence, réglages du modèle et connexion à FreeLLMAPI.</DialogDescription>
+          <DialogDescription className="sr-only">
+            Apparence, personnalisation, réglages de génération, connexion à FreeLLMAPI, modèles, clés et utilisation.
+          </DialogDescription>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           {/* Navigation (en haut sur mobile, à gauche sur grand écran) */}
-          <nav aria-label="Sections des paramètres" className="shrink-0 border-b p-3 sm:w-60 sm:border-r sm:border-b-0">
+          <nav aria-label="Sections des paramètres" className="shrink-0 border-b p-3 sm:w-60 sm:overflow-y-auto sm:border-r sm:border-b-0">
             <div className="relative mb-3 hidden sm:block">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
               <Input
@@ -150,71 +188,23 @@ export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSa
 
           {/* Contenu : key = la page se rejoue (animation) quand on change de section */}
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
-            <Appear key={current.id} from={{ autoAlpha: 0, y: 8, duration: 0.3 }}>
+            <Appear key={current.id} from={{ autoAlpha: 0, y: 8, duration: 0.3 }} className={cn(!current.wide && 'max-w-3xl')}>
+              <h2 className="mb-4 text-xl font-semibold tracking-tight">{current.label}</h2>
               {current.id === 'general' && <GeneralPage />}
+              {current.id === 'profile' && <ProfilePage />}
               {current.id === 'model' && <ModelPage />}
               {/* Recréée à chaque ouverture : la clé tapée ne reste jamais en mémoire. */}
               {current.id === 'connection' && <ConnectionPage settings={settings} onSaved={onSaved} />}
+              {current.id === 'models' && <ModelsPage onChanged={onModelsChanged} />}
+              {current.id === 'keys' && <KeysPage onChanged={onModelsChanged} />}
+              {current.id === 'usage' && <UsagePage />}
+              {current.id === 'analytics' && <AnalyticsPage />}
               {current.id === 'updates' && <UpdatesPage />}
             </Appear>
           </div>
         </div>
       </DialogContent>
     </Dialog>
-  )
-}
-
-// --- Briques de mise en page ----------------------------------------------------------
-
-function Group({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="mb-8 last:mb-0">
-      <h3 className="mb-1 text-base font-semibold">{title}</h3>
-      <div className="flex flex-col">{children}</div>
-    </section>
-  )
-}
-
-/** Une ligne : libellé + description à gauche, contrôle à droite, contenu optionnel en dessous. */
-function Row({ label, description, control, children }: { label: string; description?: ReactNode; control?: ReactNode; children?: ReactNode }) {
-  return (
-    <div className="border-b py-4 last:border-0">
-      <div className="flex items-center justify-between gap-6">
-        <div className="min-w-0">
-          <p className="text-sm">{label}</p>
-          {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
-        </div>
-        {control && <div className="shrink-0">{control}</div>}
-      </div>
-      {children && <div className="mt-3">{children}</div>}
-    </div>
-  )
-}
-
-function SelectControl<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-}: {
-  value: T
-  options: { value: T; label: string }[]
-  onChange: (v: T) => void
-  label: string
-}) {
-  return (
-    <Select items={options} value={value} onValueChange={(v) => v && onChange(v as T)}>
-      <SelectTrigger aria-label={label} className="min-w-36 border-transparent shadow-none hover:bg-muted">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent align="end" alignItemWithTrigger={false}>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   )
 }
 
@@ -325,18 +315,6 @@ function ModelPage() {
 
   return (
     <>
-      <Group title="Instructions">
-        <Row label="Prompt système" description="Envoyé avant chaque conversation, comme des instructions permanentes (ton, langue, rôle…).">
-          <Textarea
-            value={prefs.systemPrompt}
-            onChange={(e) => setPreferences({ systemPrompt: e.target.value })}
-            placeholder="Ex. : Réponds toujours en français, de façon concise, avec des exemples de code en TypeScript."
-            aria-label="Prompt système"
-            className="max-h-60 min-h-24"
-          />
-        </Row>
-      </Group>
-
       <Group title="Échantillonnage">
         <p className="mb-1 text-sm text-muted-foreground">
           Désactivé, c’est la valeur par défaut du fournisseur qui s’applique. Seuls les réglages activés sont envoyés.
@@ -398,15 +376,15 @@ function ModelPage() {
 
       <Button variant="outline" onClick={() => setPreferences(resetModelSettings())}>
         <RotateCcw aria-hidden />
-        Réinitialiser les réglages du modèle
+        Réinitialiser les réglages de génération
       </Button>
     </>
   )
 }
 
 function resetModelSettings(): Partial<Preferences> {
-  const { systemPrompt, temperature, topP, maxTokens, historyLimit } = DEFAULT_PREFERENCES
-  return { systemPrompt, temperature, topP, maxTokens, historyLimit }
+  const { temperature, topP, maxTokens, historyLimit } = DEFAULT_PREFERENCES
+  return { temperature, topP, maxTokens, historyLimit }
 }
 
 function SliderRow({
@@ -640,10 +618,10 @@ function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSa
         </div>
       </div>
 
-      <Group title="Statistiques">
+      <Group title="Accès à FreeLLMAPI">
         <Row
-          label="Accès en lecture seule"
-          description="Les pages Modèles et Analytique lisent les statistiques de FreeLLMAPI via la session de son appli desktop. Le chat ne peut rien modifier : ni tes clés, ni tes réglages de routage."
+          label="Modèles, clés, utilisation et analytique"
+          description="Ces pages passent par la session de l’appli desktop FreeLLMAPI. Le chat peut seulement lire les statistiques, activer ou désactiver un modèle, et ajouter ou supprimer une clé de fournisseur. Il ne peut ni afficher une clé en clair, ni toucher aux autres réglages."
         />
       </Group>
     </form>
@@ -763,24 +741,5 @@ function UpdatesPage() {
         </Notice>
       )}
     </>
-  )
-}
-
-const NOTICE_TONES = {
-  warning: 'bg-amber-500/10 text-amber-900 dark:text-amber-200',
-  success: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300',
-  error: 'bg-destructive/10 text-destructive',
-}
-
-function Notice({ tone, icon: Icon, children }: { tone: keyof typeof NOTICE_TONES; icon: LucideIcon; children: ReactNode }) {
-  return (
-    <Appear
-      role={tone === 'error' ? 'alert' : 'status'}
-      from={tone === 'error' ? { x: -8, ease: 'elastic.out(1, 0.35)', duration: 0.6 } : { autoAlpha: 0, y: -4 }}
-      className={cn('my-3 flex gap-2 rounded-lg p-3 text-sm', NOTICE_TONES[tone])}
-    >
-      <Icon className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span>{children}</span>
-    </Appear>
   )
 }

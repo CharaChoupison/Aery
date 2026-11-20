@@ -1,4 +1,4 @@
-import { ArrowDown, CircleAlert, RotateCcw } from 'lucide-react'
+import { ArrowDown, CircleAlert, FileText, RotateCcw } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { Button } from '@/components/ui/button'
@@ -6,6 +6,7 @@ import { AssistantMessage } from '@/components/AssistantMessage'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import type { ChatError, UiMessage } from '@/hooks/useChat'
+import { formatSize } from '@/lib/attachments'
 
 interface Props {
   messages: UiMessage[]
@@ -84,9 +85,12 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
                 key={m.id}
                 enabled={!initialIds.has(m.id)}
                 from={{ autoAlpha: 0, y: 24, scale: 0.96, transformOrigin: '100% 100%', ease: 'back.out(1.6)' }}
-                className="max-w-[85%] self-end whitespace-pre-wrap break-words rounded-3xl bg-muted px-4 py-2.5"
+                className="flex max-w-[85%] flex-col items-end gap-2 self-end"
               >
-                {m.content}
+                {m.attachments && m.attachments.length > 0 && <UserAttachments message={m} />}
+                {m.content && (
+                  <div className="whitespace-pre-wrap break-words rounded-3xl bg-muted px-4 py-2.5">{m.content}</div>
+                )}
               </Appear>
             ) : (
               <Appear key={m.id} enabled={!initialIds.has(m.id)} from={{ autoAlpha: 0, y: 10, delay: 0.1 }}>
@@ -125,5 +129,28 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
         </Appear>
       )}
     </div>
+  )
+}
+
+/** Images et fichiers joints à un message, au-dessus de la bulle. */
+function UserAttachments({ message }: { message: UiMessage }) {
+  return (
+    <ul aria-label="Fichiers joints" className="flex flex-wrap justify-end gap-2">
+      {message.attachments!.map((a) =>
+        a.kind === 'image' ? (
+          <li key={a.id}>
+            <img src={a.dataUrl} alt={a.name} title={a.name} className="max-h-60 max-w-full rounded-2xl border object-contain sm:max-w-72" />
+          </li>
+        ) : (
+          <li key={a.id} className="flex max-w-64 items-center gap-2 rounded-2xl border px-3 py-2" title={a.name}>
+            <FileText className="size-4 shrink-0 text-primary" aria-hidden />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">{a.name}</span>
+              <span className="block text-xs text-muted-foreground">{formatSize(a.size)}</span>
+            </span>
+          </li>
+        ),
+      )}
+    </ul>
   )
 }

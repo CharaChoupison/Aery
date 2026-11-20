@@ -158,17 +158,19 @@ pub fn proxy_request(
     Ok(())
 }
 
-/// Relais des routes /admin/* : GET seulement, liste blanche, jeton du dashboard gardé côté Rust.
+/// Relais des routes /admin/* : lectures en liste blanche + trois écritures validées (voir admin.rs).
+/// Le jeton du dashboard reste côté Rust.
 fn admin_request(
     app: AppHandle,
     state: State<'_, Requests>,
     request: ProxyRequest,
     on_event: Channel<ProxyEvent>,
 ) -> Result<(), String> {
-    if request.method != "GET" {
-        return Err("Lecture seule : seule la méthode GET est autorisée".into());
-    }
-    let api_path = admin::admin_api_path(&request.path).ok_or("Chemin non autorisé")?;
+    let (method, api_path, body) = if request.method == "GET" {
+        (reqwest::Method::GET, admin::admin_api_path(&request.path).ok_or("Chemin non autorisé")?, None)
+    } else {
+        admin::admin_write(&request.method, &request.path, request.body.as_deref())?
+    };
     let port = settings::read_port(&app);
     let id = request.id;
 
@@ -177,7 +179,7 @@ fn admin_request(
     let handle = tauri::async_runtime::spawn(async move {
         let emit = |event: ProxyEvent| on_event.send(event).is_ok();
         let session = task_app.state::<admin::DashboardSession>();
-        match admin::fetch(&session, port, &api_path).await {
+        match admin::send(&session, port, method, &api_path, body).await {
             Ok((status, content_type, body)) => {
                 if emit(ProxyEvent::Head { status, headers: vec![("content-type".into(), content_type)] }) {
                     emit(ProxyEvent::Chunk { data: body });

@@ -11,7 +11,7 @@ type ProxyEvent =
   | { type: 'error'; message: string }
 
 interface AppFetchInit {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   body?: string
   signal?: AbortSignal
 }

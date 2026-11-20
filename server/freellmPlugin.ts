@@ -9,8 +9,9 @@
  *     ajoutant lui-même l'en-tête Authorization. Le streaming SSE passe tel quel,
  *     et si le navigateur annule (bouton Stop), la requête amont est coupée aussi.
  *
- *  3. /admin/* : statistiques de FreeLLMAPI (analytique, journaux, scores des modèles),
- *     en LECTURE SEULE et sur une liste blanche de routes. Voir la section dédiée plus bas.
+ *  3. /admin/* : statistiques de FreeLLMAPI (analytique, journaux, scores, utilisation) en lecture,
+ *     plus TROIS écritures précises (activer un modèle, ajouter / supprimer une clé de fournisseur).
+ *     Tout le reste est refusé. Voir la section dédiée plus bas.
  *
  * Dans l'appli Tauri, ce rôle est tenu par la partie Rust (src-tauri/src/proxy.rs et admin.rs).
  */
@@ -263,14 +264,19 @@ function proxyToFreeLLM(req: IncomingMessage, res: ServerResponse): void {
 //
 // Ce jeton donne TOUS les droits d'admin (clés, réglages…). Donc :
 //  - il reste ici, en mémoire : le navigateur ne le voit jamais ;
-//  - seules des routes de LECTURE, listées ci-dessous, sont relayées, et seulement en GET.
+//  - en GET, seules les routes de lecture listées ci-dessous passent. Aucune ne renvoie une clé
+//    en clair (/api/keys ne donne que des clés masquées ; /api/keys/export et /reveal restent bloquées) ;
+//  - en écriture, seules trois opérations passent (voir adminWrite), avec un corps REVALIDÉ et
+//    reconstruit ici : on ne relaie jamais tel quel ce qu'envoie la page.
 
 const ADMIN_ROUTES: RegExp[] = [
   /^\/api\/analytics\/(summary|timeline|by-model|by-platform|error-distribution|errors|requests)$/,
   /^\/api\/analytics\/requests\/\d{1,12}$/,
   /^\/api\/logs$/,
   /^\/api\/fallback$/,
-  /^\/api\/fallback\/routing$/,
+  /^\/api\/fallback\/(routing|token-usage|rate-limit-usage|quota-forecast)$/,
+  /^\/api\/keys$/,
+  /^\/api\/keys\/providers$/,
 ]
 // Paramètres de requête : caractères simples seulement (range=7d&levels=warn,error&q=…).
 const SAFE_QUERY = /^[A-Za-z0-9_\-.,=&%+:*]*$/
@@ -282,6 +288,70 @@ export function adminApiPath(url: string): string | null {
   const apiPath = `/api/${pathname.slice('/admin/'.length)}`
   if (!ADMIN_ROUTES.some((re) => re.test(apiPath)) || !SAFE_QUERY.test(query) || query.length > 512) return null
   return query ? `${apiPath}?${query}` : apiPath
+}
+
+// --- Écritures autorisées ---------------------------------------------------------------
+
+const PLATFORM_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/
+// Clé d'un fournisseur : ASCII imprimable sans espace (comme notre propre clé), 4096 caractères max.
+const PROVIDER_KEY_PATTERN = /^[\x21-\x7E]{1,4096}$/
+
+export interface AdminWrite {
+  method: 'PUT' | 'POST' | 'DELETE'
+  apiPath: string
+  body?: string
+}
+
+/**
+ * Les seules écritures autorisées. Renvoie la requête à faire (corps reconstruit), ou un message d'erreur.
+ *  - PUT    /admin/fallback   : activer / désactiver des modèles  [{ modelDbId, priority, enabled }]
+ *  - POST   /admin/keys       : ajouter une clé de fournisseur     { platform, key?, label? } (pas de proxyUrl)
+ *  - DELETE /admin/keys/<id>  : supprimer une clé
+ */
+export function adminWrite(method: string, url: string, body: unknown): AdminWrite | string {
+  if (url.includes('?')) return 'Paramètres non autorisés.'
+
+  if (method === 'PUT' && url === '/admin/fallback') {
+    if (!Array.isArray(body) || body.length === 0 || body.length > 2000) return 'Liste de modèles attendue.'
+    const entries: { modelDbId: number; priority: number; enabled: boolean }[] = []
+    for (const e of body as unknown[]) {
+      const { modelDbId, priority, enabled } = (e ?? {}) as Record<string, unknown>
+      if (
+        !Number.isInteger(modelDbId) || (modelDbId as number) < 1 || (modelDbId as number) > 1e12 ||
+        !Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1e6 ||
+        typeof enabled !== 'boolean'
+      )
+        return 'Modèle invalide.'
+      entries.push({ modelDbId: modelDbId as number, priority: priority as number, enabled })
+    }
+    return { method: 'PUT', apiPath: '/api/fallback', body: JSON.stringify(entries) }
+  }
+
+  if (method === 'POST' && url === '/admin/keys') {
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) return 'Objet JSON attendu.'
+    const b = body as Record<string, unknown>
+    if (typeof b.platform !== 'string' || !PLATFORM_PATTERN.test(b.platform) || b.platform === 'custom')
+      return 'Fournisseur invalide.'
+    const key = typeof b.key === 'string' ? b.key.trim() : ''
+    if (b.key !== undefined && typeof b.key !== 'string') return 'Clé invalide.'
+    if (key && !PROVIDER_KEY_PATTERN.test(key)) return 'Clé invalide : pas d’espaces, 4096 caractères maximum.'
+    let label = ''
+    if (b.label !== undefined) {
+      if (typeof b.label !== 'string') return 'Nom invalide.'
+      label = b.label.replace(/[\p{Cc}\p{Cf}]/gu, '').trim()
+      if (label.length > 64) return 'Nom trop long (64 caractères maximum).'
+    }
+    return {
+      method: 'POST',
+      apiPath: '/api/keys',
+      body: JSON.stringify({ platform: b.platform, ...(key && { key }), ...(label && { label }) }),
+    }
+  }
+
+  const deleteMatch = /^\/admin\/keys\/(\d{1,12})$/.exec(url)
+  if (method === 'DELETE' && deleteMatch) return { method: 'DELETE', apiPath: `/api/keys/${deleteMatch[1]}` }
+
+  return 'Cette action n’est pas autorisée depuis le chat.'
 }
 
 interface UpstreamResult {
@@ -343,21 +413,55 @@ async function getDashboardToken(port: number, refresh = false): Promise<string>
 }
 
 async function handleAdmin(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.method !== 'GET') {
-    sendError(res, 405, 'method_not_allowed', 'Lecture seule : seule la méthode GET est autorisée.')
+  const url = req.url ?? ''
+  let target: { method: string; apiPath: string; body?: string }
+
+  if (req.method === 'GET') {
+    const apiPath = adminApiPath(url)
+    if (!apiPath) {
+      sendError(res, 404, 'not_allowed', 'Cette route de FreeLLMAPI n’est pas accessible depuis le chat.')
+      return
+    }
+    target = { method: 'GET', apiPath }
+  } else if (req.method === 'PUT' || req.method === 'POST' || req.method === 'DELETE') {
+    let body: unknown
+    if (req.method !== 'DELETE') {
+      // Même règle que /api/settings : du JSON obligatoire (force un « preflight » en cross-origin).
+      if (!req.headers['content-type']?.startsWith('application/json')) {
+        sendError(res, 415, 'bad_content_type', 'Content-Type application/json attendu')
+        return
+      }
+      try {
+        body = await readJsonBody(req, 256 * 1024)
+      } catch (e) {
+        sendError(res, 400, 'bad_request', (e as Error).message)
+        return
+      }
+    }
+    const write = adminWrite(req.method, url, body)
+    if (typeof write === 'string') {
+      sendError(res, 403, 'not_allowed', write)
+      return
+    }
+    target = write
+  } else {
+    sendError(res, 405, 'method_not_allowed', 'Méthode non autorisée.')
     return
   }
-  const apiPath = adminApiPath(req.url ?? '')
-  if (!apiPath) {
-    sendError(res, 404, 'not_allowed', 'Cette route de FreeLLMAPI n’est pas accessible depuis le chat.')
-    return
-  }
+
   const { port } = readConfig()
   try {
-    const get = async (token: string) => upstreamRequest(port, 'GET', apiPath, { authorization: `Bearer ${token}` })
-    let result = await get(await getDashboardToken(port))
+    const send = async (token: string) =>
+      upstreamRequest(
+        port,
+        target.method,
+        target.apiPath,
+        { authorization: `Bearer ${token}`, ...(target.body !== undefined && { 'content-type': 'application/json' }) },
+        target.body,
+      )
+    let result = await send(await getDashboardToken(port))
     // Session expirée (30 jours) ou FreeLLMAPI redémarré : on en redemande une, une seule fois.
-    if (result.status === 401) result = await get(await getDashboardToken(port, true))
+    if (result.status === 401) result = await send(await getDashboardToken(port, true))
     res.statusCode = result.status
     res.setHeader('Content-Type', result.contentType)
     res.setHeader('Cache-Control', 'no-store')

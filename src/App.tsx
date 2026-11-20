@@ -12,11 +12,10 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useChat } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
+import { useVisionModels } from '@/hooks/useVisionModels'
 import { useNavHistory, type Place } from '@/hooks/useNavHistory'
 import { NavArrows, useNavShortcuts } from '@/components/NavArrows'
 import { ApiError, getSettings, type Settings } from '@/lib/api'
-import { AnalyticsPage } from '@/pages/AnalyticsPage'
-import { ModelsPage } from '@/pages/ModelsPage'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { hasCustomModelSettings, usePreferences } from '@/lib/preferences'
 import { useTheme } from '@/lib/theme'
@@ -27,15 +26,13 @@ import { cn } from '@/lib/utils'
 /** Largeur de la barre latérale sur grand écran (w-64). */
 const SIDEBAR_WIDTH = 256
 
-/** Ce qu'affiche la zone principale : le chat, ou une page de statistiques FreeLLMAPI. */
-export type View = 'chat' | 'models' | 'analytics'
-const VIEW_TITLES: Record<View, string> = { chat: '', models: 'Modèles', analytics: 'Analytique' }
+/** Ce qu'affiche la zone principale. Modèles, clés, utilisation et analytique sont dans les Paramètres. */
+export type View = 'chat'
 
 export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
-  const [view, setView] = useState<View>('chat')
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true) // grand écran : barre dépliée ou repliée
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false) // mobile : panneau coulissant
@@ -50,7 +47,10 @@ export default function App() {
     setSettingsOpen(true)
   }
 
-  const chat = useChat({ onMissingKey: () => openSettings('connection') })
+  // Incrémenté quand des modèles sont activés / désactivés ou des clés ajoutées (Paramètres).
+  const [modelsVersion, setModelsVersion] = useState(0)
+  const isVisionModel = useVisionModels(settings?.hasKey ?? false, modelsVersion)
+  const chat = useChat({ onMissingKey: () => openSettings('connection'), isVisionModel })
   const models = useModels(settings?.hasKey ?? false)
   const { active, activeError, isStreaming, streamingId } = chat
   const activeIsStreaming = active !== null && streamingId === active.id
@@ -59,11 +59,8 @@ export default function App() {
   const { selectConversation, newConversation: resetConversation, conversations } = chat
   const goTo = useCallback(
     (place: Place) => {
-      if (place.view === 'chat') {
-        if (place.conversationId) selectConversation(place.conversationId)
-        else resetConversation()
-      }
-      setView(place.view)
+      if (place.conversationId) selectConversation(place.conversationId)
+      else resetConversation()
     },
     [selectConversation, resetConversation],
   )
@@ -72,7 +69,7 @@ export default function App() {
     [conversations],
   )
   const nav = useNavHistory(
-    { view, conversationId: view === 'chat' ? (active?.id ?? null) : null },
+    { view: 'chat', conversationId: active?.id ?? null },
     goTo,
     placeExists,
   )
@@ -97,19 +94,12 @@ export default function App() {
     streamingId,
     onRename: chat.renameConversation,
     onDelete: chat.deleteConversation,
-    view,
-    onNavigate: (v: View) => {
-      setView(v)
-      setMobileSidebarOpen(false)
-    },
     onNew: () => {
       chat.newConversation()
-      setView('chat')
       setMobileSidebarOpen(false)
     },
     onSelect: (id: string) => {
       chat.selectConversation(id)
-      setView('chat')
       setMobileSidebarOpen(false)
     },
     onOpenSettings: () => {
@@ -131,13 +121,11 @@ export default function App() {
       isStreaming={activeIsStreaming}
       busy={isStreaming && !activeIsStreaming}
       focusKey={active?.id ?? 'new'}
+      modelReadsImages={isVisionModel(chat.selectedModel)}
     />
   )
   const isEmpty = !active || active.messages.length === 0
-  const newConversation = () => {
-    chat.newConversation()
-    setView('chat')
-  }
+  const newConversation = () => chat.newConversation()
   // Largeur de la colonne de messages (réglage « Largeur de la conversation »).
   const widthClass = prefs.chatWidth === 'wide' ? 'max-w-5xl' : 'max-w-3xl'
 
@@ -200,9 +188,9 @@ export default function App() {
               </Appear>
             )}
             <span className="pointer-events-none min-w-0 truncate px-2 text-sm font-medium">
-              {view === 'chat' ? (active?.title ?? 'Nouvelle conversation') : VIEW_TITLES[view]}
+              {active?.title ?? 'Nouvelle conversation'}
             </span>
-            <div className={cn('ml-auto items-center gap-1', view === 'chat' ? 'flex' : 'hidden')}>
+            <div className="ml-auto flex items-center gap-1">
               <IconButton label="Réglages du modèle" onClick={() => openSettings('model')} className="relative">
                 <SlidersHorizontal className="size-4" aria-hidden />
                 {/* Petit point : des réglages personnalisés sont actifs (prompt système, température…) */}
@@ -233,14 +221,7 @@ export default function App() {
             </p>
           )}
 
-          {view !== 'chat' ? (
-            // Pages de statistiques : elles défilent dans la zone principale.
-            <main className="min-h-0 flex-1 overflow-y-auto">
-              <Appear key={view} from={{ autoAlpha: 0, y: 12 }}>
-                {view === 'models' ? <ModelsPage /> : <AnalyticsPage />}
-              </Appear>
-            </main>
-          ) : isEmpty ? (
+          {isEmpty ? (
             // Conversation vide : titre et zone de saisie au centre, comme ChatGPT.
             // key : l'animation d'accueil se rejoue à chaque nouvelle conversation.
             <Appear
@@ -287,6 +268,10 @@ export default function App() {
           setSettings(s)
           // Nouvelle clé ou nouveau port : la liste des modèles a pu changer.
           if (s.hasKey) void models.refresh()
+        }}
+        onModelsChanged={() => {
+          void models.refresh()
+          setModelsVersion((v) => v + 1)
         }}
       />
     </TooltipProvider>

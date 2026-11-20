@@ -1,7 +1,7 @@
 //! Partie native de l'appli (Rust). Elle remplace le plugin Vite de la version web :
 //!  - settings : clé FreeLLMAPI dans le Trousseau macOS + port ;
 //!  - proxy    : relais en streaming vers FreeLLMAPI, qui ajoute la clé ;
-//!  - admin    : statistiques FreeLLMAPI en lecture seule (analytique, journaux, modèles) ;
+//!  - admin    : API d’admin FreeLLMAPI (statistiques en lecture + activer un modèle, ajouter/supprimer une clé) ;
 //!  - updates  : mise à jour de l'appli depuis le repo git du projet.
 
 mod admin;

@@ -1,14 +1,26 @@
-// Statistiques de FreeLLMAPI (lecture seule) : analytique, journaux, scores des modèles.
+// API d'admin de FreeLLMAPI : statistiques, utilisation, clés des fournisseurs, modèles actifs.
 // Le navigateur appelle /admin/... ; notre proxy (plugin Vite ou Rust) y ajoute la session
-// du dashboard FreeLLMAPI et ne laisse passer qu'une liste blanche de routes en GET.
+// du dashboard FreeLLMAPI et ne laisse passer qu'une liste blanche : des lectures en GET, et
+// trois écritures (activer des modèles, ajouter / supprimer une clé de fournisseur).
 
 import { ApiError } from './api'
 import { appFetch, IS_TAURI } from './transport'
 
 async function adminGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return adminRequest<T>(path, { signal })
+}
+
+async function adminRequest<T>(
+  path: string,
+  init: { method?: 'GET' | 'PUT' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {},
+): Promise<T> {
   let res: Response
   try {
-    res = await appFetch(`/admin/${path}`, { signal })
+    res = await appFetch(`/admin/${path}`, {
+      method: init.method,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      signal: init.signal,
+    })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e
     throw new ApiError(0, IS_TAURI ? 'Erreur interne de l’appli.' : 'Impossible de joindre le serveur local (npm run dev).')
@@ -165,6 +177,8 @@ export function getLogs(options: { levels?: LogLevel[]; q?: string; limit?: numb
 
 export interface ChainModel {
   modelDbId: number
+  /** Identifiant exposé par /v1/models pour un groupe (sinon c'est modelId). */
+  canonicalId?: string
   /** Même modèle servi par plusieurs fournisseurs = même groupe (ex. « llama 3.3 70b »). */
   groupKey?: string
   groupLabel?: string
@@ -200,6 +214,14 @@ export interface Routing {
 }
 
 export const getChain = (signal?: AbortSignal) => adminGet<ChainModel[]>('fallback', signal)
+
+/** Active / désactive des modèles dans la chaîne de repli (la priorité ne change pas). */
+export function setModelsEnabled(models: Pick<ChainModel, 'modelDbId' | 'priority'>[], enabled: boolean) {
+  return adminRequest<{ success: boolean }>('fallback', {
+    method: 'PUT',
+    body: models.map((m) => ({ modelDbId: m.modelDbId, priority: m.priority, enabled })),
+  })
+}
 export const getRouting = (signal?: AbortSignal) => adminGet<Routing>('fallback/routing', signal)
 
 /** Noms des stratégies de routage, comme dans le dashboard de FreeLLMAPI. */
@@ -212,6 +234,105 @@ export const STRATEGY_LABELS: Record<string, string> = {
   custom: 'Personnalisé',
   decision: 'Decision',
 }
+
+// --- Clés des fournisseurs -----------------------------------------------------
+
+export interface Provider {
+  platform: string
+  name: string
+  kind: 'chat' | 'search'
+  /** Marche sans clé (clé facultative). */
+  keyless: boolean
+  configured: boolean
+  keyCount: number
+  enabledKeyCount: number
+}
+
+export type KeyStatus = 'healthy' | 'unknown' | 'invalid' | 'rate_limited' | 'error' | string
+
+/** Une clé telle que FreeLLMAPI la décrit : jamais en clair, seulement masquée. */
+export interface ProviderKey {
+  id: number
+  platform: string
+  label: string
+  maskedKey: string
+  status: KeyStatus
+  enabled: boolean
+  keyless: boolean
+  monthlyRequestCap: number | null
+  monthlyTokenCap: number | null
+  monthlyUsage: { requests: number; tokens: number; resetsAt: string }
+  lastHealthError: string | null
+  createdAt: string
+}
+
+export interface AddKeyResult {
+  id: number
+  maskedKey: string
+  modelsAvailable?: number
+  /** Message de FreeLLMAPI quand aucun modèle de ce fournisseur n'est au catalogue. */
+  notice?: string | null
+}
+
+export const getProviders = (signal?: AbortSignal) =>
+  adminGet<{ providers: Provider[] }>('keys/providers', signal).then((r) => r.providers)
+export const getKeys = (signal?: AbortSignal) => adminGet<ProviderKey[]>('keys', signal)
+
+export function addKey(input: { platform: string; key: string; label?: string }) {
+  return adminRequest<AddKeyResult>('keys', { method: 'POST', body: input })
+}
+
+export function deleteKey(id: number) {
+  return adminRequest<{ success: boolean }>(`keys/${id}`, { method: 'DELETE' })
+}
+
+// --- Utilisation (quotas) -------------------------------------------------------
+
+export interface TokenUsage {
+  /** Budget mensuel de tokens annoncé par les fournisseurs (0 = aucun plafond connu). */
+  totalBudget: number
+  totalUsed: number
+  models: {
+    modelDbId: number
+    displayName: string
+    platform: string
+    modelId: string
+    budget: number
+    used: number
+    enabled: boolean
+  }[]
+}
+
+export interface UsageWindow {
+  used: number
+  limit: number
+}
+
+export interface RateLimitRow {
+  modelDbId: number
+  platform: string
+  modelId: string
+  rpm: UsageWindow | null // requêtes par minute
+  rpd: UsageWindow | null // requêtes par jour
+  tpm: UsageWindow | null // tokens par minute
+}
+
+export interface QuotaPool {
+  platform: string
+  pool: string
+  limit: number | null
+  remaining: number | null
+  remainingPct: number | null
+  resetAt: string | null
+  status: string
+  warning: 'low_balance' | 'exhausting_soon' | null
+}
+
+export const getTokenUsage = (signal?: AbortSignal) => adminGet<TokenUsage>('fallback/token-usage', signal)
+export const getRateLimitUsage = (signal?: AbortSignal) =>
+  adminGet<{ generatedAtMs: number; rows: RateLimitRow[] }>('fallback/rate-limit-usage', signal)
+export const getQuotaForecast = (signal?: AbortSignal) =>
+  adminGet<{ pools: QuotaPool[] }>('fallback/quota-forecast', signal)
 
 // --- Mise en forme ------------------------------------------------------------
 
