@@ -50,15 +50,16 @@ export function AssistantMessage({ message: m, streaming, isLast }: Props) {
       {answer !== '' && !streaming && (
         <div
           className={cn(
-            'mt-1 flex min-w-0 items-center text-muted-foreground transition-opacity',
+            'mt-1 flex min-w-0 items-center text-muted-foreground transition-opacity select-none',
             !isLast && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
           )}
         >
           <CopyButton label="Copier la réponse" getText={() => answer} side="bottom" />
           {m.model && (
             <span className="ml-1 flex min-w-0 items-center gap-1 text-xs" title={`Modèle qui a réellement répondu : ${m.model}`}>
+              {/* Le nom reste sélectionnable : on peut vouloir le copier. */}
               <Cpu className="size-3 shrink-0" aria-hidden />
-              <span className="truncate">{m.model}</span>
+              <span className="truncate select-text">{m.model}</span>
             </span>
           )}
         </div>

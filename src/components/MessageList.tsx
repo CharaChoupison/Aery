@@ -76,7 +76,10 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
+      {/* select-none sur la zone vide : un double-clic à côté des messages ne sélectionne plus rien
+          (sinon WebKit attrape le mot le plus proche et surligne tout le vide). Les messages,
+          eux, restent sélectionnables (select-text). */}
+      <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto select-none">
         <div ref={listRef} className={cn('mx-auto flex flex-col gap-6 px-4 py-6', widthClass)}>
           {messages.map((m) =>
             m.role === 'user' ? (
@@ -89,11 +92,11 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
               >
                 {m.attachments && m.attachments.length > 0 && <UserAttachments message={m} />}
                 {m.content && (
-                  <div className="whitespace-pre-wrap break-words rounded-3xl bg-muted px-4 py-2.5">{m.content}</div>
+                  <div className="whitespace-pre-wrap break-words rounded-3xl bg-muted px-4 py-2.5 select-text">{m.content}</div>
                 )}
               </Appear>
             ) : (
-              <Appear key={m.id} enabled={!initialIds.has(m.id)} from={{ autoAlpha: 0, y: 10, delay: 0.1 }}>
+              <Appear key={m.id} enabled={!initialIds.has(m.id)} from={{ autoAlpha: 0, y: 10, delay: 0.1 }} className="select-text">
                 <AssistantMessage message={m} streaming={isStreaming && m.id === lastId} isLast={m.id === lastId} />
               </Appear>
             ),
@@ -106,7 +109,7 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
               from={{ x: -10, ease: 'elastic.out(1, 0.3)', duration: 0.7 }}
               className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive"
             >
-              <span className="flex gap-2">
+              <span className="flex gap-2 select-text">
                 <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                 {error.message}
               </span>
