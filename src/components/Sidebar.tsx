@@ -223,7 +223,13 @@ export function Sidebar(props: Props) {
                       count={items.length}
                       active={activeProjectId === p.id && (props.activeId === null || !items.some((c) => c.id === props.activeId))}
                       onToggle={() => toggleProject(p.id)}
-                      onOpen={() => props.onOpenProject(p.id)}
+                      onOpen={() => {
+                        // Clic sur le dossier : on l'ouvre et on le déplie. Déjà affiché et déplié : on le replie.
+                        const showing = activeProjectId === p.id && props.activeId === null
+                        if (showing && open) toggleProject(p.id)
+                        else if (!open) toggleProject(p.id)
+                        props.onOpenProject(p.id)
+                      }}
                       onEdit={() => props.onEditProject(p.id)}
                       onAskDelete={() => setPendingProjectDelete(p)}
                     />
