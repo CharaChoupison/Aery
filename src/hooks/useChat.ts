@@ -48,6 +48,17 @@ export interface ChatError {
   message: string
   code?: string
   retryHistory: UiMessage[] // historique à renvoyer si on clique sur « Réessayer »
+  retryOverrides?: SendOverrides // options du message (commande slash) à garder pour « Réessayer »
+}
+
+/** Options d'un seul message (commandes /search, /nosearch, /fusion). */
+export interface SendOverrides {
+  /** Forcer (true) ou couper (false) la recherche web pour ce message. */
+  webSearch?: boolean
+  /** Modèle utilisé pour ce message seulement (la conversation garde le sien). */
+  model?: string
+  /** Petite remarque affichée sous la réponse. */
+  note?: string
 }
 
 const newId = () => crypto.randomUUID()
@@ -114,6 +125,9 @@ function agentFor(project: Project | undefined, folder: string | undefined): Age
 interface RunContext {
   projectId?: string
   folder?: string
+  overrides?: SendOverrides
+  /** Messages à remettre si la réponse échoue ou est arrêtée sans rien (régénération : l'ancienne réponse). */
+  fallback?: UiMessage[]
 }
 
 function withoutFolder(c: Conversation): Conversation {
@@ -307,7 +321,7 @@ export function useChat(options: Options = {}) {
   const runStream = useCallback(
     // projectId est passé par l'appelant : une conversation toute neuve n'est pas encore
     // dans conversationsRef (mis à jour après le prochain rendu).
-    async (convId: string, history: UiMessage[], model: string, { projectId, folder }: RunContext) => {
+    async (convId: string, history: UiMessage[], model: string, { projectId, folder, overrides = {}, fallback }: RunContext) => {
       const controller = new AbortController()
       abortRef.current = controller
       setStreamingId(convId)
@@ -318,9 +332,15 @@ export function useChat(options: Options = {}) {
 
       // Une image à lire, mais le modèle choisi n'est pas un modèle « vision » : on laisse le routeur
       // (auto) choisir un modèle qui sait lire les images, pour ce message seulement.
-      let note: string | undefined
+      if (overrides.model) model = overrides.model
+      const webSearch = overrides.webSearch ?? prefs.webSearch
+      let note = overrides.note
       if (!isRouterModel(model) && sendsImages(history, prefs.historyLimit) && isVisionRef.current?.(model) === false) {
         note = `« ${model} » ne lit pas les images : réponse confiée à Auto, qui a choisi un modèle vision.`
+        model = 'auto'
+      } else if (overrides.webSearch && !isRouterModel(model) && isToolRef.current?.(model) === false) {
+        // /search demandé avec un modèle qui ne sait pas appeler d'outils : Auto choisit un modèle compatible.
+        note = `« ${model} » ne sait pas chercher sur le web : réponse confiée à Auto.`
         model = 'auto'
       }
 
@@ -337,7 +357,7 @@ export function useChat(options: Options = {}) {
           ...c,
           messages: c.messages.map((m) => (m.id === assistantId ? { ...m, ...patch } : m)),
         }))
-      const removeAssistant = () => updateConversation(convId, (c) => ({ ...c, messages: history }))
+      const removeAssistant = () => updateConversation(convId, (c) => ({ ...c, messages: fallback ?? history }))
 
       let received = ''
       let reasoning = ''
@@ -348,7 +368,7 @@ export function useChat(options: Options = {}) {
         let agent = agentFor(project, folder) // espace Code ou dossier joint : la boucle d'outils
         // Recherche web (menu « + ») : elle passe aussi par la boucle d'outils. Seulement si le modèle
         // sait appeler des outils (null = on ne sait pas : on essaie, le routeur fera le tri).
-        if (prefs.webSearch && isToolRef.current?.(model) !== false) {
+        if (webSearch && isToolRef.current?.(model) !== false) {
           agent = agent ? { ...agent, webSearch: true } : { webSearch: true, searchOnly: true }
         }
         const chatOptions = {
@@ -423,6 +443,7 @@ export function useChat(options: Options = {}) {
             message: apiError?.message ?? 'Une erreur inattendue est survenue.',
             code: apiError?.code,
             retryHistory: history,
+            retryOverrides: overrides,
           })
         }
       } finally {
@@ -434,7 +455,7 @@ export function useChat(options: Options = {}) {
   )
 
   const send = useCallback(
-    (text: string, attachments: Attachment[] = []) => {
+    (text: string, attachments: Attachment[] = [], overrides?: SendOverrides) => {
       const content = text.trim()
       if ((!content && attachments.length === 0) || streamingId) return
 
@@ -450,6 +471,7 @@ export function useChat(options: Options = {}) {
         void runStream(existing.id, [...existing.messages, userMessage], existing.model ?? defaultModel, {
           projectId: existing.projectId,
           folder: existing.folder,
+          overrides,
         })
         return
       }
@@ -470,7 +492,7 @@ export function useChat(options: Options = {}) {
       setConversations((prev) => [conv, ...prev])
       setActiveId(conv.id)
       setPendingFolder(null)
-      void runStream(conv.id, [userMessage], defaultModel, { projectId: conv.projectId, folder: conv.folder })
+      void runStream(conv.id, [userMessage], defaultModel, { projectId: conv.projectId, folder: conv.folder, overrides })
     },
     [activeId, conversations, defaultModel, pendingFolder, pendingProjectId, runStream, streamingId],
   )
@@ -481,8 +503,37 @@ export function useChat(options: Options = {}) {
     if (!activeId || streamingId) return
     const error = errors[activeId]
     const conv = conversations.find((c) => c.id === activeId)
-    if (error) void runStream(activeId, error.retryHistory, conv?.model ?? defaultModel, { projectId: conv?.projectId, folder: conv?.folder })
+    if (error) {
+      void runStream(activeId, error.retryHistory, conv?.model ?? defaultModel, {
+        projectId: conv?.projectId,
+        folder: conv?.folder,
+        overrides: error.retryOverrides,
+      })
+    }
   }, [activeId, conversations, defaultModel, errors, runStream, streamingId])
+
+  /**
+   * /retry : refait la dernière réponse (à partir du dernier message de l'utilisateur).
+   * Si la nouvelle réponse échoue, l'ancienne est remise. Renvoie un message d'erreur, ou null.
+   */
+  const regenerate = useCallback((): string | null => {
+    if (streamingId) return 'Attends la fin de la réponse en cours.'
+    const conv = conversations.find((c) => c.id === activeId)
+    if (!conv) return 'Aucune conversation ouverte.'
+    const error = errors[conv.id]
+    if (error) {
+      retry() // la dernière réponse a échoué : on la retente simplement
+      return null
+    }
+    const lastUser = conv.messages.findLastIndex((m) => m.role === 'user')
+    if (lastUser < 0) return 'Rien à régénérer pour l’instant.'
+    void runStream(conv.id, conv.messages.slice(0, lastUser + 1), conv.model ?? defaultModel, {
+      projectId: conv.projectId,
+      folder: conv.folder,
+      fallback: conv.messages,
+    })
+    return null
+  }, [activeId, conversations, defaultModel, errors, retry, runStream, streamingId])
 
   /** Choisir un modèle : il s'applique à la conversation ouverte ET devient le défaut des nouvelles. */
   const setModel = useCallback(
@@ -583,6 +634,7 @@ export function useChat(options: Options = {}) {
     send,
     stop,
     retry,
+    regenerate,
     newConversation,
     selectConversation,
     moveConversation,

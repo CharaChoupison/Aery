@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { sanitizeCustomCommands, type CustomCommand } from '@/lib/commands'
 
 /**
  * Préférences de l'interface (thème, animations, réglages du modèle…).
@@ -58,6 +59,8 @@ export interface Preferences {
   autoTitle: boolean
   /** Recherche web (menu « + » du chat) : le modèle peut chercher sur le web via FreeLLMAPI. */
   webSearch: boolean
+  /** Commandes slash créées par l'utilisateur (Paramètres › Commandes). */
+  commands: CustomCommand[]
 }
 
 /** Bornes des réglages : les mêmes que le Playground de FreeLLMAPI. */
@@ -94,6 +97,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   historyLimit: 20,
   autoTitle: true,
   webSearch: true,
+  commands: [],
 }
 
 const STORAGE_KEY = 'freellm-chat:preferences'
@@ -158,6 +162,7 @@ function sanitize(raw: unknown): Preferences {
     historyLimit: Math.round(clamp(r.historyLimit, LIMITS.historyLimit.min, LIMITS.historyLimit.max, d.historyLimit)),
     autoTitle: typeof r.autoTitle === 'boolean' ? r.autoTitle : d.autoTitle,
     webSearch: typeof r.webSearch === 'boolean' ? r.webSearch : d.webSearch,
+    commands: sanitizeCustomCommands(r.commands),
   }
 }
 
