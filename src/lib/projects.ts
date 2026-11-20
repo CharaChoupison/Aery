@@ -22,8 +22,35 @@ export interface Project {
   space?: Space
   /** Projet de code : dossier que l'agent peut lire (chemin absolu choisi dans la fenêtre de macOS). */
   workspace?: string
+  /** Icône choisie (id de PROJECT_ICONS, `src/components/ProjectIcon.tsx`). Absente = dossier par défaut. */
+  icon?: string
+  /** Couleur de l'icône (id de PROJECT_COLORS). Absente = gris, comme le reste de l'interface. */
+  color?: ProjectColor
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * Couleurs proposées pour l'icône d'un projet. Les teintes sont des variables CSS (`--project-<id>`,
+ * dans index.css), avec une nuance pour le thème clair et une pour le sombre : jamais de couleur en dur.
+ */
+export const PROJECT_COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'violet', 'pink'] as const
+export type ProjectColor = (typeof PROJECT_COLORS)[number]
+
+export const PROJECT_COLOR_LABELS: Record<ProjectColor, string> = {
+  red: 'Rouge',
+  orange: 'Orange',
+  yellow: 'Jaune',
+  green: 'Vert',
+  teal: 'Turquoise',
+  blue: 'Bleu',
+  violet: 'Violet',
+  pink: 'Rose',
+}
+
+/** Couleur valide ou rien (la base peut contenir n'importe quoi : on ne fait pas confiance). */
+export function projectColor(project: Pick<Project, 'color'> | undefined): ProjectColor | undefined {
+  return PROJECT_COLORS.includes(project?.color as ProjectColor) ? project!.color : undefined
 }
 
 /** Les deux espaces de l'appli : le chat normal, et le code (mode Agent), comme Claude Code / Codex. */

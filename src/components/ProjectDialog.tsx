@@ -1,5 +1,6 @@
-import { Brain, CircleAlert, FileText, FolderCode, FolderPlus, Paperclip, X } from 'lucide-react'
+import { Ban, Brain, Check, CircleAlert, FileText, FolderCode, FolderPlus, Paperclip, X } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { defaultProjectIcon, PROJECT_ICONS, ProjectIcon } from '@/components/ProjectIcon'
 import { Group, Row } from '@/components/settings/layout'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -9,10 +10,11 @@ import { Textarea } from '@/components/ui/textarea'
 import type { Conversation } from '@/hooks/useChat'
 import { AttachmentError, formatSize, readAttachment, type Attachment } from '@/lib/attachments'
 import { folderName, pickWorkspace } from '@/lib/agent/tools'
-import { filesChars, PROJECT_LIMITS, projectSpace, type Project, type Space } from '@/lib/projects'
+import { filesChars, PROJECT_COLOR_LABELS, PROJECT_COLORS, PROJECT_LIMITS, projectColor, projectSpace, type Project, type ProjectColor, type Space } from '@/lib/projects'
+import { cn } from '@/lib/utils'
 import { IS_TAURI } from '@/lib/transport'
 
-export type ProjectDraft = Pick<Project, 'name' | 'instructions' | 'files' | 'memory' | 'workspace'>
+export type ProjectDraft = Pick<Project, 'name' | 'instructions' | 'files' | 'memory' | 'workspace' | 'icon' | 'color'>
 
 interface Props {
   /** null = création d'un nouveau projet. */
@@ -34,6 +36,8 @@ export function ProjectDialog({ project, space = 'chat', conversations, onSave, 
     files: project?.files ?? [],
     memory: project?.memory ?? true,
     workspace: project?.workspace,
+    icon: project?.icon && PROJECT_ICONS[project.icon] ? project.icon : undefined,
+    color: projectColor(project ?? undefined),
   }))
   const [folderError, setFolderError] = useState<string | null>(null)
 
@@ -102,6 +106,23 @@ export function ProjectDialog({ project, space = 'chat', conversations, onSave, 
                 placeholder="Ex. : Appli Aery, Révisions de maths…"
                 aria-label="Nom du projet"
                 className="h-9"
+              />
+            </Row>
+            <Row
+              label="Icône et couleur"
+              description="Pour repérer le projet d’un coup d’œil dans la barre latérale."
+              control={
+                <span className="flex size-10 items-center justify-center rounded-xl border bg-muted/40">
+                  <ProjectIcon project={{ ...draft, space: isCode ? 'code' : 'chat' }} className="size-5" />
+                </span>
+              }
+            >
+              <IconPicker
+                isCode={isCode}
+                icon={draft.icon}
+                color={draft.color}
+                onIcon={(icon) => update({ icon })}
+                onColor={(color) => update({ color })}
               />
             </Row>
             {isCode && (
@@ -245,5 +266,96 @@ export function ProjectDialog({ project, space = 'chat', conversations, onSave, 
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Pastilles de couleur + grille d'icônes. Le premier choix de chaque ligne = par défaut (gris, dossier). */
+function IconPicker({
+  isCode,
+  icon,
+  color,
+  onIcon,
+  onColor,
+}: {
+  isCode: boolean
+  icon?: string
+  color?: ProjectColor
+  onIcon: (icon: string | undefined) => void
+  onColor: (color: ProjectColor | undefined) => void
+}) {
+  const DefaultIcon = defaultProjectIcon({ space: isCode ? 'code' : 'chat' })
+  const tint = color ? { color: `var(--project-${color})` } : undefined
+  const cell = 'flex size-8 items-center justify-center rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring'
+  return (
+    <div className="flex flex-col gap-3">
+      <div role="radiogroup" aria-label="Couleur de l’icône" className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!color}
+          aria-label="Gris (par défaut)"
+          title="Gris (par défaut)"
+          onClick={() => onColor(undefined)}
+          className={cn(cell, 'size-7 rounded-full bg-muted-foreground/40 ring-offset-2 ring-offset-background', !color && 'ring-2 ring-foreground')}
+        >
+          {!color && <Check className="size-3.5 text-background" aria-hidden />}
+        </button>
+        {PROJECT_COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            role="radio"
+            aria-checked={color === c}
+            aria-label={PROJECT_COLOR_LABELS[c]}
+            title={PROJECT_COLOR_LABELS[c]}
+            onClick={() => onColor(c)}
+            style={{ backgroundColor: `var(--project-${c})` }}
+            className={cn(cell, 'size-7 rounded-full ring-offset-2 ring-offset-background', color === c && 'ring-2 ring-foreground')}
+          >
+            {color === c && <Check className="size-3.5 text-white" aria-hidden />}
+          </button>
+        ))}
+      </div>
+      <div role="radiogroup" aria-label="Icône du projet" className="flex flex-wrap gap-1">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!icon}
+          aria-label="Dossier (par défaut)"
+          title="Dossier (par défaut)"
+          onClick={() => onIcon(undefined)}
+          className={cn(cell, !icon ? 'bg-accent ring-1 ring-foreground/25' : 'hover:bg-muted')}
+        >
+          <DefaultIcon className={cn('size-4', !tint && 'text-muted-foreground')} style={tint} aria-hidden />
+        </button>
+        {Object.entries(PROJECT_ICONS).map(([id, { icon: Icon, label }]) => (
+          <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={icon === id}
+            aria-label={label}
+            title={label}
+            onClick={() => onIcon(id)}
+            className={cn(cell, icon === id ? 'bg-accent ring-1 ring-foreground/25' : 'hover:bg-muted')}
+          >
+            <Icon className={cn('size-4', !tint && 'text-muted-foreground')} style={tint} aria-hidden />
+          </button>
+        ))}
+      </div>
+      {(icon || color) && (
+        <button
+          type="button"
+          onClick={() => {
+            onIcon(undefined)
+            onColor(undefined)
+          }}
+          className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Ban className="size-3.5" aria-hidden />
+          Revenir au dossier gris
+        </button>
+      )}
+    </div>
   )
 }

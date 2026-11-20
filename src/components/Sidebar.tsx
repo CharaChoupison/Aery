@@ -3,11 +3,8 @@ import {
   CircleArrowUp,
   CircleAlert,
   CodeXml,
-  Folder,
-  FolderCode,
   FolderInput,
   FolderMinus,
-  FolderOpen,
   FolderPlus,
   LoaderCircle,
   MessageSquare,
@@ -20,6 +17,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import { AeryLogo } from '@/components/AeryLogo'
+import { Collapse } from '@/components/Collapse'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
@@ -228,8 +227,8 @@ export function Sidebar(props: Props) {
                       onEdit={() => props.onEditProject(p.id)}
                       onAskDelete={() => setPendingProjectDelete(p)}
                     />
-                    {open && items.length > 0 && (
-                      <ul className="mt-0.5 ml-4 flex flex-col gap-0.5 border-l border-sidebar-border pl-1.5">
+                    <Collapse open={open && items.length > 0} className="pt-0.5">
+                      <ul className="ml-4 flex flex-col gap-0.5 border-l border-sidebar-border pl-1.5">
                         {items.map((c) => (
                           <ConversationItem
                             key={c.id}
@@ -240,7 +239,7 @@ export function Sidebar(props: Props) {
                           />
                         ))}
                       </ul>
-                    )}
+                    </Collapse>
                   </li>
                 )
               })}
@@ -485,7 +484,19 @@ function ProjectItem({
   onAskDelete: () => void
 }) {
   const code = projectSpace(project) === 'code'
-  const Icon = code ? FolderCode : open ? FolderOpen : Folder
+  // Petit « pop » de l'icône quand on déplie / replie (pas au premier affichage).
+  const motion = useMotion()
+  const iconRef = useRef<HTMLSpanElement>(null)
+  const prevOpen = useRef(open)
+  useGSAP(
+    () => {
+      if (prevOpen.current === open) return
+      prevOpen.current = open
+      if (!motion || !iconRef.current) return
+      gsap.fromTo(iconRef.current, { scale: 0.8, rotate: open ? -8 : 8 }, { scale: 1, rotate: 0, duration: 0.35, ease: 'back.out(3)', clearProps: 'transform' })
+    },
+    { dependencies: [open] },
+  )
   return (
     <div className={cn('group/item flex items-center rounded-lg transition-colors hover:bg-sidebar-accent', active && 'bg-sidebar-accent')}>
       <button
@@ -505,7 +516,9 @@ function ProjectItem({
         title={code && project.workspace ? `${project.name}\n${project.workspace}` : project.name}
         className={cn('flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left text-sm', active && 'font-medium')}
       >
-        <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span ref={iconRef} className="flex shrink-0">
+          <ProjectIcon project={project} open={open} className="size-4" />
+        </span>
         <span className="truncate">{project.name}</span>
       </button>
       <DropdownMenu>
@@ -598,7 +611,7 @@ function MoveMenu({
             <DropdownMenuLabel>Chat</DropdownMenuLabel>
             {chat.map((p) => (
               <DropdownMenuItem key={p.id} onClick={() => onMove(c.id, p.id)}>
-                <Folder aria-hidden />
+                <ProjectIcon project={p} />
                 <span className="truncate">{p.name}</span>
               </DropdownMenuItem>
             ))}
@@ -616,7 +629,7 @@ function MoveMenu({
             <DropdownMenuLabel>Code</DropdownMenuLabel>
             {code.map((p) => (
               <DropdownMenuItem key={p.id} onClick={() => onMove(c.id, p.id)}>
-                <FolderCode aria-hidden />
+                <ProjectIcon project={p} />
                 <span className="truncate">{p.name}</span>
               </DropdownMenuItem>
             ))}

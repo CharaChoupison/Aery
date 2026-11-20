@@ -1,4 +1,4 @@
-import { Brain, CodeXml, FolderCode, FolderOpen, FolderPlus, PanelLeft, Pencil, SlidersHorizontal, SquarePen } from 'lucide-react'
+import { Brain, CodeXml, FolderPlus, PanelLeft, Pencil, SlidersHorizontal, SquarePen } from 'lucide-react'
 import { AeryLogo } from '@/components/AeryLogo'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
@@ -18,6 +18,7 @@ import { conversationSpace, projectSpace, type Project, type Space } from '@/lib
 import { folderName, pickWorkspace, releaseWorkspace } from '@/lib/agent/tools'
 import { IS_TAURI } from '@/lib/transport'
 import { ProjectDialog } from '@/components/ProjectDialog'
+import { ProjectBadge, ProjectIcon } from '@/components/ProjectIcon'
 import { Button } from '@/components/ui/button'
 import { useNavHistory, type Place } from '@/hooks/useNavHistory'
 import { NavArrows, useNavShortcuts } from '@/components/NavArrows'
@@ -460,7 +461,6 @@ function ProjectHome({
   onSelect: (id: string) => void
 }) {
   const code = projectSpace(project) === 'code'
-  const ProjectIcon = code ? FolderCode : FolderOpen
   const details = [
     code && (project.workspace ? `dossier ${folderName(project.workspace)}` : IS_TAURI ? 'aucun dossier' : 'JavaScript seulement'),
     project.instructions.trim() && 'instructions',
@@ -471,9 +471,7 @@ function ProjectHome({
     <div className="min-h-0 flex-1 overflow-y-auto">
       <Appear stagger={0.08} from={{ autoAlpha: 0, y: 20, duration: 0.5 }} className={cn('mx-auto flex w-full flex-col gap-6 px-4 pt-[12vh] pb-8', widthClass)}>
         <div className="flex items-center gap-3">
-          <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-muted">
-            <ProjectIcon className="size-6" aria-hidden />
-          </span>
+          <ProjectBadge project={project} className="size-12" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-2xl font-semibold">{project.name}</h2>
             <p className="truncate text-sm text-muted-foreground" title={project.workspace}>
@@ -544,7 +542,7 @@ function CodeHome({
                   onClick={() => onOpen(p.id)}
                   className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-muted/50"
                 >
-                  <FolderCode className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+                  <ProjectIcon project={p} className="size-5 shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{p.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">{p.workspace ?? 'Aucun dossier'}</span>
