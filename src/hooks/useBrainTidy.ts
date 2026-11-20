@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Brain } from '@/hooks/useBrain'
-import { chatCompletion, isAbortError } from '@/lib/api'
+import { ApiError, isAbortError, streamChat, type ChatMessage } from '@/lib/api'
 import { findByTitle, type BrainItem, type BrainVersion } from '@/lib/brain'
 import { exportVault, getVault } from '@/lib/brainExport'
 import {
@@ -19,8 +19,13 @@ import { loadRunVersions, loadTidyRuns, saveBrainVersions, saveTidyRun } from '@
 import { getPreferences, usePreferences } from '@/lib/preferences'
 import type { Project } from '@/lib/projects'
 
-/** Une requête de rangement ne doit pas rester bloquée (FreeLLMAPI peut se taire longtemps). */
-const REQUEST_TIMEOUT = 120_000
+/**
+ * La requête est en streaming : `streamChat` abandonne déjà après 60 s SANS RIEN recevoir
+ * (fournisseur saturé). Ce plafond-ci ne sert qu'à ne pas laisser tourner un modèle bavard indéfiniment.
+ */
+const REQUEST_TIMEOUT = 5 * 60_000
+/** Un lot illisible ou sans réponse est retenté une fois (avec « auto », souvent sur un autre modèle). */
+const ATTEMPTS = 2
 /** On regarde toutes les minutes si l'heure du rangement est passée. */
 const CHECK_EVERY = 60_000
 const RETRY_AFTER_ERROR = 60 * 60_000
@@ -34,6 +39,29 @@ function withTimeout(signal: AbortSignal, ms: number): AbortSignal {
   else signal.addEventListener('abort', stop, { once: true })
   controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
   return controller.signal
+}
+
+type BatchResult =
+  | { ok: true; parsed: NonNullable<ReturnType<typeof parseTidyResponse>>; model?: string }
+  | { ok: false; reason: string }
+
+/** Une tentative pour un lot : réponse lue en streaming, puis JSON décodé. */
+async function askBatch(messages: ChatMessage[], signal: AbortSignal): Promise<BatchResult> {
+  let content = ''
+  let model: string | undefined
+  try {
+    for await (const event of streamChat(messages, { signal: withTimeout(signal, REQUEST_TIMEOUT) })) {
+      if (event.type === 'text') content += event.text
+      else if (event.type === 'model') model = event.model
+    }
+  } catch (e) {
+    if (isAbortError(e) && signal.aborted) throw e // arrêté par l'utilisateur : on remonte
+    if (e instanceof ApiError && e.code === 'timeout') return { ok: false, reason: 'pas de réponse au bout de 60 secondes' }
+    if (isAbortError(e)) return { ok: false, reason: 'réponse trop longue, coupée au bout de 5 minutes' }
+    return { ok: false, reason: (e as Error).message.replace(/\.$/, '') || 'la requête a échoué' }
+  }
+  const parsed = parseTidyResponse(content)
+  return parsed ? { ok: true, parsed, model } : { ok: false, reason: 'réponse du modèle illisible' }
 }
 
 export interface TidyProgress {
@@ -105,19 +133,21 @@ export function useBrainTidy(brain: Brain, projects: Project[], ready: boolean) 
             return short ? batch[Number(short[1]) - 1] : findByTitle(brain.snapshot(), ref.replace(/^\[\[|\]\]$/g, ''))
           }
           try {
-            const { content, model } = await chatCompletion(
-              [
-                { role: 'system', content: TIDY_PROMPT },
-                { role: 'user', content: buildTidyRequest(batch, all) },
-              ],
-              { signal: withTimeout(controller.signal, REQUEST_TIMEOUT) },
-            )
-            if (model) tidyRun.model = model
-            const parsed = parseTidyResponse(content)
-            if (!parsed) {
-              tidyRun.errors.push(`Lot ${index + 1} : réponse du modèle illisible, ces éléments seront rangés la prochaine fois.`)
+            const messages: ChatMessage[] = [
+              { role: 'system', content: TIDY_PROMPT },
+              { role: 'user', content: buildTidyRequest(batch, all) },
+            ]
+            let result: BatchResult = { ok: false, reason: 'la requête a échoué' }
+            for (let attempt = 0; attempt < ATTEMPTS && !result.ok && !controller.signal.aborted; attempt++) {
+              result = await askBatch(messages, controller.signal)
+            }
+            if (!result.ok) {
+              const tries = ATTEMPTS > 1 ? ` (${ATTEMPTS} essais)` : ''
+              tidyRun.errors.push(`Lot ${index + 1} : ${result.reason}${tries}, ces éléments seront rangés la prochaine fois.`)
               continue
             }
+            const { parsed, model } = result
+            if (model) tidyRun.model = model
             const now = Date.now()
             batch.forEach((item, i) => {
               const proposal = parsed.notes.get(`n${i + 1}`)
@@ -132,8 +162,7 @@ export function useBrainTidy(brain: Brain, projects: Project[], ready: boolean) 
             }
           } catch (e) {
             if (isAbortError(e) && controller.signal.aborted) break
-            const reason = isAbortError(e) ? 'pas de réponse au bout de 2 minutes' : (e as Error).message.replace(/\.$/, '') || 'la requête a échoué'
-            tidyRun.errors.push(`Lot ${index + 1} : ${reason}.`)
+            tidyRun.errors.push(`Lot ${index + 1} : ${(e as Error).message.replace(/\.$/, '') || 'la requête a échoué'}.`)
           } finally {
             setProgress({ done: index + 1, total: batches.length })
           }

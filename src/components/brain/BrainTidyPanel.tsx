@@ -236,7 +236,10 @@ export function BrainTidyPanel({ tidy, brain, projects, onOpen }: { tidy: BrainT
 function RunRow({ run, canUndo, onUndo, onOpen, exists }: { run: TidyRun; canUndo: boolean; onUndo: () => Promise<void>; onOpen: (id: string) => void; exists: (id: string) => boolean }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const hasDetails = run.changes.length > 0 || run.errors.length > 0
+  const summary = runSummary(run)
+  // L'erreur déjà affichée comme résumé n'est pas répétée dans le détail.
+  const errors = run.errors[0] === summary ? run.errors.slice(1) : run.errors
+  const hasDetails = run.changes.length > 0 || errors.length > 0
   return (
     <li className="px-4 py-3">
       <div className="flex items-start gap-3">
@@ -256,7 +259,7 @@ function RunRow({ run, canUndo, onUndo, onOpen, exists }: { run: TidyRun; canUnd
             {run.status === 'undone' && <span className="font-normal text-muted-foreground">· annulé</span>}
             {hasDetails && <ChevronDown className={cn('size-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden />}
           </span>
-          <span className="block text-sm text-muted-foreground">{runSummary(run)}</span>
+          <span className="block text-sm text-muted-foreground">{summary}</span>
           {run.export && (
             <span className={cn('block text-xs', run.export.error ? 'text-destructive' : 'text-muted-foreground')}>
               {run.export.error ? `Export Obsidian : ${run.export.error}` : `Export Obsidian : ${run.export.written} fichier${run.export.written > 1 ? 's' : ''} mis à jour`}
@@ -282,7 +285,7 @@ function RunRow({ run, canUndo, onUndo, onOpen, exists }: { run: TidyRun; canUnd
       </div>
       <Collapse open={open}>
         <ul className="mt-2 ml-7 flex flex-col gap-1 text-sm">
-          {run.errors.map((e) => (
+          {errors.map((e) => (
             <li key={e} className="text-destructive">
               {e}
             </li>
