@@ -209,7 +209,8 @@ export interface ModelScore {
 
 export interface Routing {
   strategy: string
-  weights: { reliability: number; speed: number; intelligence: number }
+  /** null en mode « Manuel » (priority) : l'ordre de la chaîne suffit, les scores ne servent pas. */
+  weights: { reliability: number; speed: number; intelligence: number } | null
   scores: ModelScore[]
 }
 
@@ -224,7 +225,10 @@ export function setModelsEnabled(models: Pick<ChainModel, 'modelDbId' | 'priorit
 }
 export const getRouting = (signal?: AbortSignal) => adminGet<Routing>('fallback/routing', signal)
 
-export type Weights = Routing['weights']
+export type Weights = NonNullable<Routing['weights']>
+
+/** Poids de « Équilibré » (mêmes valeurs que FreeLLMAPI) : point de départ du mode Personnalisé depuis Manuel. */
+export const BALANCED_WEIGHTS: Weights = { reliability: 0.5, speed: 0.25, intelligence: 0.25 }
 
 /** Change la stratégie du routeur (et ses poids si elle est « custom »). Rien d'autre n'est modifié. */
 export function setRouting(strategy: string, weights?: Weights) {

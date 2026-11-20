@@ -19,6 +19,7 @@ import {
   type ModelScore,
   type Routing,
   type Weights,
+  BALANCED_WEIGHTS,
 } from '@/lib/admin'
 import { SelectControl } from '@/components/settings/layout'
 import { Slider } from '@/components/ui/slider'
@@ -158,7 +159,6 @@ export function ModelsPage({ onChanged }: { onChanged?: () => void }) {
 
   const error = chain.error ?? routing.error
   const loading = chain.loading || routing.loading
-  const weights = routing.data?.weights
 
   return (
     <div className="flex flex-col gap-5">
@@ -179,7 +179,8 @@ export function ModelsPage({ onChanged }: { onChanged?: () => void }) {
       {error && <ErrorNotice message={error} onRetry={() => (chain.reload(), routing.reload())} />}
       {toggleError && <ErrorNotice message={toggleError} />}
 
-      {routing.data && weights && (
+      {/* Toujours affichée, même en « Manuel » (pas de poids) : sinon on ne pourrait plus en sortir. */}
+      {routing.data && (
         <Appear>
           <RoutingCard
             routing={routing.data}
@@ -427,7 +428,7 @@ const AXIS_KEYS = ['reliability', 'speed', 'intelligence'] as const
 function RoutingCard({ routing, onChanged }: { routing: Routing; onChanged: () => void }) {
   // Affichage immédiat du choix (puis FreeLLMAPI confirme, et les scores se recalculent).
   const [strategy, setStrategy] = useState(routing.strategy)
-  const [draft, setDraft] = useState<Weights>(routing.weights)
+  const [draft, setDraft] = useState<Weights>(routing.weights ?? BALANCED_WEIGHTS)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -436,7 +437,7 @@ function RoutingCard({ routing, onChanged }: { routing: Routing; onChanged: () =
   if (synced !== routing) {
     setSynced(routing)
     setStrategy(routing.strategy)
-    setDraft(routing.weights)
+    setDraft(routing.weights ?? BALANCED_WEIGHTS)
   }
 
   const options = Object.keys(STRATEGY_HELP)
@@ -454,7 +455,7 @@ function RoutingCard({ routing, onChanged }: { routing: Routing; onChanged: () =
       onChanged()
     } catch (e) {
       setStrategy(routing.strategy)
-      setDraft(routing.weights)
+      setDraft(routing.weights ?? BALANCED_WEIGHTS)
       setError(e instanceof ApiError ? e.message : 'Changement de stratégie impossible.')
     } finally {
       setSaving(false)
@@ -485,15 +486,20 @@ function RoutingCard({ routing, onChanged }: { routing: Routing; onChanged: () =
         </div>
       </div>
 
-      <WeightsBar weights={draft} />
-      <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {AXES.map((a) => (
-          <span key={a.key} className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full" style={{ background: a.color }} aria-hidden />
-            {a.label} {percent(draft[a.key])}
-          </span>
-        ))}
-      </p>
+      {/* En « Manuel », pas de poids : seul l'ordre de la chaîne compte. */}
+      {strategy !== 'priority' && (
+        <>
+          <WeightsBar weights={draft} />
+          <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {AXES.map((a) => (
+              <span key={a.key} className="flex items-center gap-1.5">
+                <span className="size-2 rounded-full" style={{ background: a.color }} aria-hidden />
+                {a.label} {percent(draft[a.key])}
+              </span>
+            ))}
+          </p>
+        </>
+      )}
 
       {strategy === 'custom' && (
         <Appear from={{ autoAlpha: 0, y: -6 }} className="mt-4 grid gap-4 sm:grid-cols-3">
