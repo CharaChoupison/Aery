@@ -14,7 +14,8 @@ import { filesChars, PROJECT_COLOR_LABELS, PROJECT_COLORS, PROJECT_LIMITS, proje
 import { cn } from '@/lib/utils'
 import { IS_TAURI } from '@/lib/transport'
 
-export type ProjectDraft = Pick<Project, 'name' | 'instructions' | 'files' | 'memory' | 'workspace' | 'icon' | 'color'>
+/** `files` : fichiers de référence, rangés dans le second cerveau à l'enregistrement. */
+export type ProjectDraft = Pick<Project, 'name' | 'instructions' | 'memory' | 'workspace' | 'icon' | 'color'> & { files: Attachment[] }
 
 interface Props {
   /** null = création d'un nouveau projet. */
@@ -22,18 +23,20 @@ interface Props {
   /** Espace du projet créé (pour un projet existant, on prend le sien). */
   space?: Space
   conversations: Conversation[]
+  /** Fichiers de référence actuels du projet (éléments du cerveau). */
+  files: Attachment[]
   onSave: (draft: ProjectDraft) => void
   onClose: () => void
   onForgetSummary: (conversationId: string) => void
 }
 
 /** Création / modification d'un projet : nom, instructions, fichiers de référence, mémoire. */
-export function ProjectDialog({ project, space = 'chat', conversations, onSave, onClose, onForgetSummary }: Props) {
+export function ProjectDialog({ project, space = 'chat', conversations, files, onSave, onClose, onForgetSummary }: Props) {
   const isCode = (project ? projectSpace(project) : space) === 'code'
   const [draft, setDraft] = useState<ProjectDraft>(() => ({
     name: project?.name ?? '',
     instructions: project?.instructions ?? '',
-    files: project?.files ?? [],
+    files,
     memory: project?.memory ?? true,
     workspace: project?.workspace,
     icon: project?.icon && PROJECT_ICONS[project.icon] ? project.icon : undefined,
@@ -171,7 +174,7 @@ export function ProjectDialog({ project, space = 'chat', conversations, onSave, 
             </Row>
             <Row
               label="Fichiers de référence"
-              description={`Fichiers texte (notes, code, CSV…) que le modèle a toujours sous les yeux. ${Math.round((used / PROJECT_LIMITS.filesChars) * 100)} % de la place utilisée.`}
+              description={`Fichiers texte (notes, code, CSV…) que le modèle a toujours sous les yeux. Ils sont rangés dans ton Cerveau : les retirer ici ne les supprime pas. ${Math.round((used / PROJECT_LIMITS.filesChars) * 100)} % de la place utilisée.`}
               control={
                 <>
                   <input

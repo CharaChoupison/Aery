@@ -25,6 +25,8 @@ interface Deps {
   /** Affiche la carte d'utilisation au-dessus du champ. */
   showUsage: () => void
   custom: CustomCommand[]
+  /** /note : garde le texte dans le second cerveau. */
+  saveNote: (text: string) => void
 }
 
 const fold = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim()
@@ -40,7 +42,7 @@ function firstWordSuggestions(items: string[], arg: string): CommandSuggestion[]
  * Toutes les commandes slash, avec leurs actions branchées sur l'état de l'appli.
  * Recalculé à chaque rendu (c'est léger) : les actions voient toujours l'état à jour.
  */
-export function useSlashCommands({ chat, models, projects, newConversation, showUsage, custom }: Deps): SlashCommand[] {
+export function useSlashCommands({ chat, models, projects, newConversation, showUsage, custom, saveNote }: Deps): SlashCommand[] {
   const active = chat.active
   const hasMessages = (active?.messages.length ?? 0) > 0
   const busy = chat.isStreaming ? 'Une réponse est en cours.' : undefined
@@ -91,6 +93,19 @@ export function useSlashCommands({ chat, models, projects, newConversation, show
       sends: true,
       disabled: busy,
       run: (arg, files) => needsText(arg, files, '/nosearch ta question') ?? send(arg, files, { webSearch: false }),
+    },
+    {
+      ...builtin('cerveau'),
+      sends: true,
+      disabled: busy,
+      run: (arg, files) => needsText(arg, files, '/cerveau qu’est-ce que j’avais noté sur React ?') ?? send(arg, files, { brain: true }),
+    },
+    {
+      ...builtin('note'),
+      run: (arg) => {
+        if (!arg) return 'Écris la note après la commande : /note Penser à relire le cours de BDD'
+        saveNote(arg)
+      },
     },
     {
       ...builtin('fusion'),

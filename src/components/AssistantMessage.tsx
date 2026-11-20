@@ -1,8 +1,9 @@
-import { Brain, ChevronRight, Cpu, Eye, LoaderCircle, Square } from 'lucide-react'
+import { BookmarkCheck, BookmarkPlus, Brain, ChevronRight, Cpu, Eye, LoaderCircle, Square } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { AgentSteps } from '@/components/AgentSteps'
 import { Appear } from '@/components/Appear'
 import { CopyButton } from '@/components/CopyButton'
+import { IconButton } from '@/components/IconButton'
 import { Markdown } from '@/components/Markdown'
 import { TypingDots } from '@/components/TypingDots'
 import type { UiMessage } from '@/hooks/useChat'
@@ -13,10 +14,14 @@ interface Props {
   message: UiMessage
   streaming: boolean // cette réponse est en train d'arriver
   isLast: boolean
+  /** Déjà gardée dans le second cerveau. */
+  saved?: boolean
+  /** « Garder dans le cerveau » (absent = bouton masqué). */
+  onSave?: (answer: string) => void
 }
 
 /** Une réponse de l'assistant : réflexion éventuelle, texte Markdown, actions. */
-export function AssistantMessage({ message: m, streaming, isLast }: Props) {
+export function AssistantMessage({ message: m, streaming, isLast, saved = false, onSave }: Props) {
   // La réflexion peut arriver dans un champ à part (m.reasoning) ou entre balises <think> dans le texte.
   const inline = splitThinking(m.content)
   const thinking = [m.reasoning, inline.thinking].filter(Boolean).join('\n\n')
@@ -62,6 +67,17 @@ export function AssistantMessage({ message: m, streaming, isLast }: Props) {
           )}
         >
           <CopyButton label="Copier la réponse" getText={() => answer} side="bottom" />
+          {onSave && (
+            <IconButton
+              label={saved ? 'Déjà dans le cerveau' : 'Garder dans le cerveau'}
+              size="icon-sm"
+              onClick={() => onSave(answer)}
+              aria-pressed={saved}
+              className={cn(saved && 'text-primary')}
+            >
+              {saved ? <BookmarkCheck className="size-3.5" aria-hidden /> : <BookmarkPlus className="size-3.5" aria-hidden />}
+            </IconButton>
+          )}
           {m.model && (
             <span className="ml-1 flex min-w-0 items-center gap-1 text-xs" title={`Modèle qui a réellement répondu : ${m.model}`}>
               {/* Le nom reste sélectionnable : on peut vouloir le copier. */}

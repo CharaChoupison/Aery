@@ -15,6 +15,7 @@ import {
 import { splitThinking } from '@/lib/thinking'
 import { MAX_ROUNDS, runAgent, type AgentStep } from '@/lib/agent/loop'
 import { agentSystemPrompt, type AgentSettings } from '@/lib/agent/tools'
+import type { BrainItem } from '@/lib/brain'
 
 /** Message affiché : un ChatMessage + des infos propres à l'interface. */
 export interface UiMessage extends ChatMessage {
@@ -55,6 +56,8 @@ export interface ChatError {
 export interface SendOverrides {
   /** Forcer (true) ou couper (false) la recherche web pour ce message. */
   webSearch?: boolean
+  /** Forcer (true) ou couper (false) la recherche dans le second cerveau pour ce message. */
+  brain?: boolean
   /** Modèle utilisé pour ce message seulement (la conversation garde le sien). */
   model?: string
   /** Petite remarque affichée sous la réponse. */
@@ -148,6 +151,8 @@ interface Options {
   isToolModel?: (modelId: string) => boolean | null
   /** Pour retrouver le projet d'une conversation (instructions, fichiers, mémoire). */
   getProject?: (id: string) => Project | undefined
+  /** Les éléments du second cerveau (fichiers de référence des projets, et y a-t-il de quoi chercher). */
+  brainItems?: BrainItem[]
 }
 
 function withoutProject(c: Conversation): Conversation {
@@ -157,7 +162,7 @@ function withoutProject(c: Conversation): Conversation {
 }
 
 /** Le message système complet : profil + instructions, puis le contexte du projet s'il y en a un. */
-function systemPromptFor(convId: string, all: Conversation[], project: Project | undefined): string {
+function systemPromptFor(convId: string, all: Conversation[], project: Project | undefined, brain: BrainItem[]): string {
   const base = buildSystemPrompt(getPreferences())
   if (!project) return base
   const others = all
@@ -165,7 +170,8 @@ function systemPromptFor(convId: string, all: Conversation[], project: Project |
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, PROJECT_LIMITS.summaries)
     .map((c) => ({ title: c.title, summary: c.summary!.text }))
-  return [base, buildProjectPrompt(project, others)].filter(Boolean).join('\n\n')
+  const files = brain.filter((i) => i.projectIds.includes(project.id)).sort((a, b) => a.createdAt - b.createdAt)
+  return [base, buildProjectPrompt(project, others, files)].filter(Boolean).join('\n\n')
 }
 
 /** Texte qui résume un message pour un titre : son contenu, sinon le nom des fichiers joints. */
@@ -199,7 +205,9 @@ export function useChat(options: Options = {}) {
   const isVisionRef = useRef(options.isVisionModel)
   const isToolRef = useRef(options.isToolModel)
   const getProjectRef = useRef(options.getProject)
+  const brainRef = useRef(options.brainItems ?? [])
   useEffect(() => {
+    brainRef.current = options.brainItems ?? []
     onMissingKeyRef.current = options.onMissingKey
     isVisionRef.current = options.isVisionModel
     isToolRef.current = options.isToolModel
@@ -334,13 +342,15 @@ export function useChat(options: Options = {}) {
       // (auto) choisir un modèle qui sait lire les images, pour ce message seulement.
       if (overrides.model) model = overrides.model
       const webSearch = overrides.webSearch ?? prefs.webSearch
+      // Second cerveau : seulement s'il y a quelque chose dedans (sinon un outil inutile de plus).
+      const brain = overrides.brain ?? (prefs.brain && brainRef.current.length > 0)
       let note = overrides.note
       if (!isRouterModel(model) && sendsImages(history, prefs.historyLimit) && isVisionRef.current?.(model) === false) {
         note = `« ${model} » ne lit pas les images : réponse confiée à Auto, qui a choisi un modèle vision.`
         model = 'auto'
-      } else if (overrides.webSearch && !isRouterModel(model) && isToolRef.current?.(model) === false) {
-        // /search demandé avec un modèle qui ne sait pas appeler d'outils : Auto choisit un modèle compatible.
-        note = `« ${model} » ne sait pas chercher sur le web : réponse confiée à Auto.`
+      } else if ((overrides.webSearch || overrides.brain) && !isRouterModel(model) && isToolRef.current?.(model) === false) {
+        // /search (ou /cerveau) demandé avec un modèle qui ne sait pas appeler d'outils : Auto choisit un modèle compatible.
+        note = `« ${model} » ne sait pas ${overrides.brain ? 'chercher dans le cerveau' : 'chercher sur le web'} : réponse confiée à Auto.`
         model = 'auto'
       }
 
@@ -368,13 +378,15 @@ export function useChat(options: Options = {}) {
         let agent = agentFor(project, folder) // espace Code ou dossier joint : la boucle d'outils
         // Recherche web (menu « + ») : elle passe aussi par la boucle d'outils. Seulement si le modèle
         // sait appeler des outils (null = on ne sait pas : on essaie, le routeur fera le tri).
-        if (webSearch && isToolRef.current?.(model) !== false) {
-          agent = agent ? { ...agent, webSearch: true } : { webSearch: true, searchOnly: true }
+        // Pareil pour le second cerveau (search_notes / read_note).
+        if ((webSearch || brain) && isToolRef.current?.(model) !== false) {
+          const extra: AgentSettings = { ...(webSearch && { webSearch: true }), ...(brain && { brain: true }) }
+          agent = agent ? { ...agent, ...extra } : { ...extra, searchOnly: true }
         }
         const chatOptions = {
           model,
           signal: controller.signal,
-          systemPrompt: [systemPromptFor(convId, conversationsRef.current, project), agent && agentSystemPrompt(agent)]
+          systemPrompt: [systemPromptFor(convId, conversationsRef.current, project, brainRef.current), agent && agentSystemPrompt(agent)]
             .filter(Boolean)
             .join('\n\n'),
           sampling: samplingParams(prefs),

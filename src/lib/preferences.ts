@@ -59,6 +59,8 @@ export interface Preferences {
   autoTitle: boolean
   /** Recherche web (menu « + » du chat) : le modèle peut chercher sur le web via FreeLLMAPI. */
   webSearch: boolean
+  /** Second cerveau (menu « + » du chat) : le modèle peut chercher dans les notes gardées. */
+  brain: boolean
   /** Commandes slash créées par l'utilisateur (Paramètres › Commandes). */
   commands: CustomCommand[]
 }
@@ -97,6 +99,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   historyLimit: 20,
   autoTitle: true,
   webSearch: true,
+  brain: true,
   commands: [],
 }
 
@@ -162,6 +165,7 @@ function sanitize(raw: unknown): Preferences {
     historyLimit: Math.round(clamp(r.historyLimit, LIMITS.historyLimit.min, LIMITS.historyLimit.max, d.historyLimit)),
     autoTitle: typeof r.autoTitle === 'boolean' ? r.autoTitle : d.autoTitle,
     webSearch: typeof r.webSearch === 'boolean' ? r.webSearch : d.webSearch,
+    brain: typeof r.brain === 'boolean' ? r.brain : d.brain,
     commands: sanitizeCustomCommands(r.commands),
   }
 }

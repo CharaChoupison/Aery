@@ -1,4 +1,4 @@
-import { ArrowUp, Bot, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
+import { ArrowUp, Bot, Brain, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Appear } from '@/components/Appear'
@@ -48,6 +48,8 @@ interface Props {
   modelUsesTools?: boolean | null
   /** Commandes slash (« /new », « /model »…) proposées quand le message commence par « / ». */
   commands?: SlashCommand[]
+  /** Texte d'exemple du champ (absent = celui par défaut). */
+  placeholder?: string
 }
 
 const MAX_HEIGHT = 200 // px : au-delà, le champ défile au lieu de grandir
@@ -67,9 +69,10 @@ export function Composer({
   onFolderChange,
   modelUsesTools = null,
   commands = [],
+  placeholder,
 }: Props) {
-  // Recherche web : simple préférence (activée par défaut), lue par useChat à chaque envoi.
-  const { webSearch } = usePreferences()
+  // Recherche web et second cerveau : simples préférences (activées par défaut), lues par useChat à chaque envoi.
+  const { webSearch, brain } = usePreferences()
   const [value, setValue] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [reading, setReading] = useState(0) // fichiers en cours de lecture
@@ -421,6 +424,19 @@ export function Composer({
                 )}
                 <SwitchLook on={webSearch} className={cn(!(webSearch && modelUsesTools === false) && 'ml-auto')} />
               </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={brain}
+                onCheckedChange={(checked) => setPreferences({ brain: checked })}
+                closeOnClick={false}
+                className="pr-1.5 [&_[data-slot=dropdown-menu-checkbox-item-indicator]]:hidden"
+              >
+                <Brain aria-hidden />
+                Second cerveau
+                {brain && modelUsesTools === false && (
+                  <span className="ml-auto pl-4 text-xs text-muted-foreground">pas avec ce modèle</span>
+                )}
+                <SwitchLook on={brain} className={cn(!(brain && modelUsesTools === false) && 'ml-auto')} />
+              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <textarea
@@ -439,7 +455,7 @@ export function Composer({
               }
             }}
             rows={1}
-            placeholder={agent ? 'Demande quelque chose à l’agent…' : commands.length ? 'Écris ton message, ou / pour les commandes…' : 'Écris ton message…'}
+            placeholder={placeholder ?? (agent ? 'Demande quelque chose à l’agent…' : commands.length ? 'Écris ton message, ou / pour les commandes…' : 'Écris ton message…')}
             aria-label="Message"
             {...(commands.length > 0 && {
               role: 'combobox',

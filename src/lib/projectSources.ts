@@ -1,9 +1,8 @@
 import type { Conversation } from '@/hooks/useChat'
 import type { Attachment } from './attachments'
-import type { Project } from './projects'
 
 /**
- * Sources d'un projet : tout ce qui a servi dans ses conversations, retrouvé dans l'historique
+ * Sources d'un projet (ou de tout l'historique, onglet « Capturé » du cerveau) : tout ce qui a servi dans les conversations, retrouvé dans l'historique
  * (rien de plus n'est stocké) :
  *  - les documents envoyés (pièces jointes des messages) ;
  *  - les pages web trouvées par la recherche web (`step.sources`), celles citées dans la réponse en premier.
@@ -21,8 +20,8 @@ interface Origin {
 export interface DocumentSource extends Origin {
   key: string
   attachment: Attachment
-  /** Déjà dans les fichiers de référence du projet. */
-  inProject: boolean
+  /** Déjà gardé (fichiers du projet, ou cerveau). */
+  known: boolean
 }
 
 export interface LinkSource extends Origin {
@@ -31,6 +30,8 @@ export interface LinkSource extends Origin {
   host: string
   /** Lien repris dans une réponse (et pas seulement trouvé par la recherche). */
   cited: boolean
+  /** Déjà gardé dans le cerveau. */
+  known: boolean
 }
 
 export interface ProjectSources {
@@ -42,7 +43,7 @@ export interface ProjectSources {
 export const attachmentKey = (a: Pick<Attachment, 'kind' | 'name' | 'size'>) => `${a.kind}:${a.name}:${a.size}`
 
 /** On ignore le #fragment et le / final : ce sont les mêmes pages. */
-function normalizeUrl(url: string): string {
+export function normalizeUrl(url: string): string {
   try {
     const u = new URL(url)
     u.hash = ''
@@ -60,8 +61,15 @@ export function hostOf(url: string): string {
   }
 }
 
-export function collectProjectSources(project: Project, conversations: Conversation[]): ProjectSources {
-  const projectFiles = new Set(project.files.map(attachmentKey))
+/**
+ * `knownFiles` : clés (attachmentKey) des fichiers déjà gardés ; `knownUrls` : URL (normalizeUrl)
+ * des pages déjà gardées.
+ */
+export function collectSources(
+  conversations: Conversation[],
+  knownFiles: Set<string> = new Set(),
+  knownUrls: Set<string> = new Set(),
+): ProjectSources {
   const documents = new Map<string, DocumentSource>()
   const links = new Map<string, LinkSource>()
 
@@ -72,7 +80,7 @@ export function collectProjectSources(project: Project, conversations: Conversat
     for (const m of c.messages) {
       for (const a of m.attachments ?? []) {
         const key = attachmentKey(a)
-        if (!documents.has(key)) documents.set(key, { ...origin, key, attachment: a, inProject: projectFiles.has(key) })
+        if (!documents.has(key)) documents.set(key, { ...origin, key, attachment: a, known: knownFiles.has(key) })
       }
       for (const step of m.steps ?? []) {
         if (step.type !== 'tool' || !step.sources) continue
@@ -81,7 +89,7 @@ export function collectProjectSources(project: Project, conversations: Conversat
           const url = normalizeUrl(s.url)
           const cited = m.content.includes(url)
           const known = links.get(url)
-          if (!known) links.set(url, { ...origin, url: s.url, title: s.title.trim() || hostOf(s.url) || s.url, host: hostOf(s.url), cited })
+          if (!known) links.set(url, { ...origin, url: s.url, title: s.title.trim() || hostOf(s.url) || s.url, host: hostOf(s.url), cited, known: knownUrls.has(url) })
           else if (cited && !known.cited) known.cited = true
         }
       }

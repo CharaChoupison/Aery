@@ -1,4 +1,5 @@
 import {
+  Brain,
   ChevronRight,
   CircleArrowUp,
   CircleAlert,
@@ -47,7 +48,9 @@ import { Input } from '@/components/ui/input'
 import { IconButton } from '@/components/IconButton'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import type { Conversation } from '@/hooks/useChat'
-import { projectSpace, type Project, type Space } from '@/lib/projects'
+import { projectSpace, type AppSpace, type Project } from '@/lib/projects'
+import { BRAIN_KIND_ICONS } from '@/components/brain/kinds'
+import { itemTitle, type BrainItem } from '@/lib/brain'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { useUpdates } from '@/lib/updates'
 import { Appear } from '@/components/Appear'
@@ -81,12 +84,19 @@ interface Props {
   onEditProject: (id: string) => void
   onDeleteProject: (id: string) => void
   onMove: (conversationId: string, projectId: string | null) => void
-  /** Espace affiché : Chat (conversations normales) ou Code (projets liés à un dossier, mode Agent). */
-  space: Space
-  onSpaceChange: (space: Space) => void
+  /** Espace affiché : Chat (conversations normales), Code (projets liés à un dossier, mode Agent) ou Cerveau. */
+  space: AppSpace
+  onSpaceChange: (space: AppSpace) => void
   /** Espace Code : ajouter un projet (un dossier). */
   onAddCodeProject: () => void
+  /** Espace Cerveau : les éléments récents, et de quoi en ouvrir / créer. */
+  brainItems: BrainItem[]
+  onNewNote: () => void
+  onOpenNote: (id: string) => void
 }
+
+/** Éléments récents du cerveau affichés dans la barre latérale. */
+const RECENT_NOTES = 40
 
 // --- Regroupement par date, comme ChatGPT -------------------------------------------
 
@@ -118,6 +128,7 @@ function groupByDate(conversations: Conversation[]): { label: string; items: Con
 export function Sidebar(props: Props) {
   const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, trafficLights, nav, projects, activeProjectId, space } = props
   const isCode = space === 'code'
+  const isBrain = space === 'brain'
   // Projets de l'espace affiché (la liste complète reste dans props.projects, pour « Déplacer vers »).
   const spaceProjects = projects.filter((p) => projectSpace(p) === space)
   const addProject = isCode ? props.onAddCodeProject : props.onNewProject
@@ -183,12 +194,41 @@ export function Sidebar(props: Props) {
 
       <div className="flex flex-col gap-2 px-2">
         <SpaceSwitcher space={space} onChange={props.onSpaceChange} />
-        <Button variant="ghost" className="h-9 w-full justify-start gap-2 px-2" onClick={onNew}>
+        <Button variant="ghost" className="h-9 w-full justify-start gap-2 px-2" onClick={isBrain ? props.onNewNote : onNew}>
           <SquarePen className="size-4" aria-hidden />
-          Nouvelle conversation
+          {isBrain ? 'Nouvelle note' : 'Nouvelle conversation'}
         </Button>
       </div>
 
+      {isBrain ? (
+        <nav aria-label="Éléments récents du cerveau" className="flex-1 overflow-y-auto px-2 py-3">
+          <h3 className="px-2 pb-1 text-xs font-medium text-muted-foreground">Récents</h3>
+          {props.brainItems.length === 0 ? (
+            <p className="px-2 text-sm text-muted-foreground">Rien pour l’instant. Garde une réponse du chat ou écris une note.</p>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {[...props.brainItems]
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .slice(0, RECENT_NOTES)
+                .map((item) => {
+                  const Icon = BRAIN_KIND_ICONS[item.kind]
+                  return (
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        onClick={() => props.onOpenNote(item.id)}
+                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+                      >
+                        <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                        <span className="truncate">{itemTitle(item)}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+            </ul>
+          )}
+        </nav>
+      ) : (
       <nav ref={navRef} aria-label="Conversations" className="flex-1 overflow-y-auto px-2 py-3">
         {storageError && (
           <p role="alert" className="mb-3 flex gap-2 rounded-lg bg-destructive/5 p-2 text-xs text-destructive">
@@ -276,6 +316,7 @@ export function Sidebar(props: Props) {
           ))
         )}
       </nav>
+      )}
 
       {/* Une nouvelle version de l'appli est prête (vérifiée au lancement puis toutes les 6 h). */}
       {updates.status?.available && (
@@ -304,9 +345,9 @@ export function Sidebar(props: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>Supprimer le projet ?</AlertDialogTitle>
             <AlertDialogDescription>
-              « {pendingProjectDelete?.name} », ses instructions et ses fichiers seront supprimés
+              « {pendingProjectDelete?.name} » et ses instructions seront supprimés
               {projectSpace(pendingProjectDelete ?? undefined) === 'code' && ' (le dossier lui-même n’est pas touché)'}. Ses conversations
-              sont gardées : elles reviennent dans la liste principale du Chat.
+              sont gardées (elles reviennent dans la liste principale du Chat), et ses fichiers restent dans le Cerveau.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -561,14 +602,15 @@ function ProjectItem({
 
 // --- Sélecteur d'espace -----------------------------------------------------------------
 
-/** Chat | Code, comme les onglets de l'appli Claude. */
-function SpaceSwitcher({ space, onChange }: { space: Space; onChange: (space: Space) => void }) {
+/** Chat | Code | Cerveau, comme les onglets de l'appli Claude. */
+function SpaceSwitcher({ space, onChange }: { space: AppSpace; onChange: (space: AppSpace) => void }) {
   const options = [
     { value: 'chat' as const, label: 'Chat', Icon: MessageSquare },
     { value: 'code' as const, label: 'Code', Icon: CodeXml },
+    { value: 'brain' as const, label: 'Cerveau', Icon: Brain },
   ]
   return (
-    <div role="group" aria-label="Espace" className="grid grid-cols-2 gap-1 rounded-lg bg-sidebar-accent/60 p-0.5">
+    <div role="group" aria-label="Espace" className="grid grid-cols-3 gap-1 rounded-lg bg-sidebar-accent/60 p-0.5">
       {options.map(({ value, label, Icon }) => (
         <button
           key={value}

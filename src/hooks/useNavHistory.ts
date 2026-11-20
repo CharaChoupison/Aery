@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { View } from '@/App'
-import type { Space } from '@/lib/projects'
+import type { AppSpace } from '@/lib/projects'
 
 /** Un « endroit » de l'appli : une page, et la conversation ouverte si c'est le chat. */
 export interface Place {
@@ -9,8 +9,8 @@ export interface Place {
   conversationId: string | null
   /** Accueil d'un projet (seulement quand aucune conversation n'est ouverte). */
   projectId?: string | null
-  /** Espace Chat ou Code (les deux accueils vides sont deux endroits différents). */
-  space: Space
+  /** Espace Chat, Code ou Cerveau (les accueils vides sont des endroits différents). */
+  space: AppSpace
   /** Date de création de la conversation ouverte (pas comparée : sert à repérer une conversation neuve). */
   createdAt?: number
 }

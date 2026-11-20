@@ -1,5 +1,5 @@
-import { ImageOff } from 'lucide-react'
-import { memo } from 'react'
+import { Globe, ImageOff } from 'lucide-react'
+import { isValidElement, memo, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
@@ -15,15 +15,31 @@ import { CodeBlock } from '@/components/CodeBlock'
 const components: Components = {
   pre: CodeBlock,
 
-  a: ({ node: _node, href, children, ...props }) =>
+  a: ({ node: _node, href, children, ...props }) => {
     // Lien vidé par defaultUrlTransform (ex. javascript:) → simple texte.
-    href ? (
+    if (!href) return <span>{children}</span>
+    const site = citationSite(href, textOf(children))
+    if (site) {
+      // Citation de source → pastille discrète avec le nom du site, l'URL complète au survol.
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          title={href}
+          className="not-prose ml-1 inline-flex max-w-48 translate-y-[-1px] items-center gap-1 rounded-full bg-muted px-2 py-px align-middle text-xs font-medium text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Globe className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">{site}</span>
+        </a>
+      )
+    }
+    return (
       <a {...props} href={href} target="_blank" rel="noopener noreferrer nofollow">
         {children}
       </a>
-    ) : (
-      <span>{children}</span>
-    ),
+    )
+  },
 
   img: ({ src, alt }) => {
     const url = typeof src === 'string' ? src : ''
@@ -49,6 +65,38 @@ const components: Components = {
   ),
 }
 
+/** Texte brut des enfants d'un lien (« **Dell** » → « Dell »). */
+function textOf(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children)
+  return ''
+}
+
+/**
+ * Si le lien ressemble à une citation de source, renvoie le nom du site à afficher.
+ * Citation = texte vide, symbole (↗, 🔗), numéro ([1]), l'URL elle-même ou son nom de domaine.
+ * Un lien écrit dans une phrase (« la [doc officielle](…) ») reste un lien normal.
+ */
+function citationSite(href: string, text: string): string | null {
+  let host: string
+  try {
+    const url = new URL(href)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    host = url.hostname.replace(/^www\./, '')
+  } catch {
+    return null
+  }
+  const t = text.trim().toLowerCase().replace(/^\[|\]$/g, '')
+  const isCitation =
+    !/[\p{L}\p{N}]/u.test(t) || // vide ou seulement des symboles
+    /^\d{1,3}$/.test(t) || // [1]
+    t === href.toLowerCase() ||
+    t.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '') === host ||
+    t === host
+  return isCitation ? host : null
+}
+
 interface Props {
   content: string
 }
@@ -65,7 +113,7 @@ export const Markdown = memo(function Markdown({ content }: Props) {
         // Code en ligne : fond gris, sans les accents graves ajoutés par défaut par « prose ».
         'prose-code:rounded-md prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:font-normal',
         'prose-code:before:content-none prose-code:after:content-none',
-        'prose-a:text-blue-600 prose-a:underline-offset-2 dark:prose-a:text-blue-400',
+        'prose-a:font-medium prose-a:text-blue-600 prose-a:decoration-blue-600/30 prose-a:underline-offset-3 hover:prose-a:decoration-current dark:prose-a:text-blue-400 dark:prose-a:decoration-blue-400/30',
         'prose-pre:m-0',
       ].join(' ')}
     >

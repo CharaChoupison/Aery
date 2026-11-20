@@ -16,12 +16,16 @@ interface Props {
   onRetry: () => void
   /** Largeur max de la colonne (réglage « Largeur de la conversation »). */
   widthClass?: string
+  /** Réponses déjà gardées dans le second cerveau (id des messages). */
+  savedIds?: Set<string>
+  /** « Garder dans le cerveau » sous une réponse. */
+  onSave?: (messageId: string, answer: string) => void
 }
 
 /** Distance (en px) en dessous de laquelle on considère qu'on est « en bas ». */
 const STICK_THRESHOLD = 80
 
-export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl' }: Props) {
+export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // useRef et pas useState : on n'a pas besoin de re-render quand ça change.
   const atBottomRef = useRef(true)
@@ -92,12 +96,20 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
               >
                 {m.attachments && m.attachments.length > 0 && <UserAttachments message={m} />}
                 {m.content && (
-                  <div className="whitespace-pre-wrap break-words rounded-3xl bg-muted px-4 py-2.5 select-text">{m.content}</div>
+                  // wrap-anywhere (et pas break-words) : une longue URL sans espace peut être coupée
+                  // n'importe où, sinon la bulle s'élargit à toute l'URL et déborde à gauche.
+                  <div className="max-w-full whitespace-pre-wrap wrap-anywhere rounded-3xl bg-muted px-4 py-2.5 select-text">{m.content}</div>
                 )}
               </Appear>
             ) : (
               <Appear key={m.id} enabled={!initialIds.has(m.id)} from={{ autoAlpha: 0, y: 10, delay: 0.1 }} className="select-text">
-                <AssistantMessage message={m} streaming={isStreaming && m.id === lastId} isLast={m.id === lastId} />
+                <AssistantMessage
+                  message={m}
+                  streaming={isStreaming && m.id === lastId}
+                  isLast={m.id === lastId}
+                  saved={savedIds?.has(m.id)}
+                  onSave={onSave && ((answer) => onSave(m.id, answer))}
+                />
               </Appear>
             ),
           )}

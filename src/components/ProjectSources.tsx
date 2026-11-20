@@ -2,40 +2,68 @@ import { Check, FileText, Globe, ImageIcon, Plus, Quote } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { Conversation } from '@/hooks/useChat'
 import { formatSize, type Attachment } from '@/lib/attachments'
-import { collectProjectSources, type DocumentSource, type LinkSource } from '@/lib/projectSources'
-import type { Project } from '@/lib/projects'
+import { collectSources, type DocumentSource, type LinkSource } from '@/lib/projectSources'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 /** Nombre de lignes affichées avant « Tout afficher ». */
 const PREVIEW = 6
 
+/** Textes des boutons : « Ajouter au projet » (accueil d'un projet) ou « Garder » (cerveau). */
+export interface SourceLabels {
+  add: string
+  addTitle: string
+  known: string
+}
+
+const PROJECT_SOURCE_LABELS: SourceLabels = {
+  add: 'Ajouter au projet',
+  addTitle: 'Le modèle l’aura sous les yeux dans toutes les conversations du projet',
+  known: 'Dans le projet',
+}
+
 /**
- * Sources du projet (accueil du projet) : documents envoyés et pages web trouvées
- * dans ses conversations. Un document texte peut être ajouté aux fichiers de référence du projet.
+ * Sources (accueil d'un projet, ou onglet « Capturé » du cerveau) : documents envoyés et pages web
+ * trouvées dans les conversations. Un document texte (et, dans le cerveau, une page) peut être gardé.
  */
 export function ProjectSources({
-  project,
   conversations,
+  knownFiles,
+  knownUrls,
   onSelect,
   onAddFile,
+  onKeepLink,
+  labels = PROJECT_SOURCE_LABELS,
+  title = 'Sources',
+  emptyText,
 }: {
-  project: Project
   conversations: Conversation[]
+  /** Clés (attachmentKey) des fichiers déjà gardés. */
+  knownFiles: Set<string>
+  /** URL (normalizeUrl) des pages déjà gardées. */
+  knownUrls?: Set<string>
   onSelect: (conversationId: string) => void
-  /** Ajoute le fichier au projet. Renvoie un message d'erreur si ce n'est pas possible (limites). */
+  /** Garde le fichier. Renvoie un message d'erreur si ce n'est pas possible (limites). */
   onAddFile: (file: Attachment) => string | null
+  /** Garde la page web (absent = pas de bouton). */
+  onKeepLink?: (link: { url: string; title: string }) => void
+  labels?: SourceLabels
+  title?: string
+  /** Texte affiché s'il n'y a rien (absent = la section disparaît). */
+  emptyText?: string
 }) {
-  const sources = useMemo(() => collectProjectSources(project, conversations), [project, conversations])
+  const sources = useMemo(() => collectSources(conversations, knownFiles, knownUrls), [conversations, knownFiles, knownUrls])
   const [error, setError] = useState<string | null>(null)
   const { documents, links } = sources
-  if (documents.length === 0 && links.length === 0) return null
+  if (documents.length === 0 && links.length === 0) {
+    return emptyText ? <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">{emptyText}</p> : null
+  }
 
   return (
-    <section aria-label="Sources du projet">
+    <section aria-label={title}>
       <Tabs defaultValue={documents.length > 0 ? 'documents' : 'links'}>
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-medium text-muted-foreground">Sources</h3>
+          <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
           <TabsList>
             <TabsTrigger value="documents" disabled={documents.length === 0}>
               Documents <Count n={documents.length} />
@@ -58,13 +86,14 @@ export function ProjectSources({
                 source={d}
                 onOpen={() => onSelect(d.conversationId)}
                 onAdd={() => setError(onAddFile(d.attachment))}
+                labels={labels}
               />
             )}
           </ShowMore>
         </TabsContent>
         <TabsContent value="links">
           <ShowMore items={links} label="pages">
-            {(l) => <LinkRow key={l.url} source={l} />}
+            {(l) => <LinkRow key={l.url} source={l} labels={labels} onKeep={onKeepLink && (() => onKeepLink({ url: l.url, title: l.title }))} />}
           </ShowMore>
         </TabsContent>
       </Tabs>
@@ -94,7 +123,7 @@ function ShowMore<T>({ items, label, children }: { items: T[]; label: string; ch
 
 const rowClass = 'flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:bg-muted/50'
 
-function DocumentRow({ source, onOpen, onAdd }: { source: DocumentSource; onOpen: () => void; onAdd: () => void }) {
+function DocumentRow({ source, onOpen, onAdd, labels }: { source: DocumentSource; onOpen: () => void; onAdd: () => void; labels: SourceLabels }) {
   const a = source.attachment
   const Icon = a.kind === 'image' ? ImageIcon : FileText
   return (
@@ -116,26 +145,30 @@ function DocumentRow({ source, onOpen, onAdd }: { source: DocumentSource; onOpen
       </button>
       {a.kind === 'text' && (
         <div className="shrink-0 pr-3">
-          {source.inProject ? (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Check className="size-3.5" aria-hidden />
-              Dans le projet
-            </span>
-          ) : (
-            <Button variant="outline" size="sm" onClick={onAdd} title="Le modèle l’aura sous les yeux dans toutes les conversations du projet">
-              <Plus aria-hidden />
-              Ajouter au projet
-            </Button>
-          )}
+          <KeepButton known={source.known} onKeep={onAdd} labels={labels} />
         </div>
       )}
     </li>
   )
 }
 
-function LinkRow({ source }: { source: LinkSource }) {
+function KeepButton({ known, onKeep, labels }: { known: boolean; onKeep: () => void; labels: SourceLabels }) {
+  return known ? (
+    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+      <Check className="size-3.5" aria-hidden />
+      {labels.known}
+    </span>
+  ) : (
+    <Button variant="outline" size="sm" onClick={onKeep} title={labels.addTitle}>
+      <Plus aria-hidden />
+      {labels.add}
+    </Button>
+  )
+}
+
+function LinkRow({ source, labels, onKeep }: { source: LinkSource; labels: SourceLabels; onKeep?: () => void }) {
   return (
-    <li className="flex first:rounded-t-2xl last:rounded-b-2xl [&:first-child>a]:rounded-t-2xl [&:last-child>a]:rounded-b-2xl">
+    <li className="flex items-center first:rounded-t-2xl last:rounded-b-2xl [&:first-child>a]:rounded-tl-2xl [&:last-child>a]:rounded-bl-2xl">
       <a href={source.url} target="_blank" rel="noopener noreferrer nofollow" title={source.url} className={rowClass}>
         <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
           <Globe className="size-4 text-muted-foreground" aria-hidden />
@@ -155,6 +188,11 @@ function LinkRow({ source }: { source: LinkSource }) {
           </span>
         </span>
       </a>
+      {onKeep && (
+        <div className="shrink-0 pr-3">
+          <KeepButton known={source.known} onKeep={onKeep} labels={labels} />
+        </div>
+      )}
     </li>
   )
 }

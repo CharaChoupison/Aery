@@ -1,4 +1,6 @@
 import {
+  BookmarkPlus,
+  Brain,
   Code,
   FolderInput,
   Gauge,
@@ -195,6 +197,8 @@ export const BUILTIN_COMMANDS: Pick<SlashCommand, 'name' | 'description' | 'icon
   { name: 'model', description: 'Changer de modèle', icon: Sparkles, argHint: '<modèle>' },
   { name: 'search', description: 'Chercher sur le web pour ce message', icon: Globe, argHint: '<message>' },
   { name: 'nosearch', description: 'Répondre sans recherche web, pour ce message', icon: GlobeLock, argHint: '<message>' },
+  { name: 'cerveau', description: 'Chercher dans ton second cerveau pour ce message', icon: Brain, argHint: '<question>' },
+  { name: 'note', description: 'Garder une note dans le second cerveau (rien n’est envoyé)', icon: BookmarkPlus, argHint: '<texte>' },
   { name: 'fusion', description: 'Plusieurs modèles répondent, un juge assemble (plusieurs requêtes)', icon: Users, argHint: '<message>' },
   { name: 'retry', description: 'Régénérer la dernière réponse', icon: RefreshCw },
   { name: 'title', description: 'Renommer la conversation', icon: Pencil, argHint: '<titre>' },

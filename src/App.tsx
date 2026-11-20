@@ -15,10 +15,15 @@ import { useChat, type Conversation } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
 import { useModelCapabilities } from '@/hooks/useModelCapabilities'
 import { useProjects } from '@/hooks/useProjects'
+import { useBrain } from '@/hooks/useBrain'
+import { BrainHome } from '@/components/brain/BrainHome'
+import { BrainItemDialog } from '@/components/brain/BrainItemDialog'
+import { firstLine } from '@/lib/brain'
 import { useSlashCommands } from '@/hooks/useSlashCommands'
-import { conversationSpace, filesChars, PROJECT_LIMITS, projectSpace, type Project, type Space } from '@/lib/projects'
+import { conversationSpace, projectSpace, type AppSpace, type Project, type Space } from '@/lib/projects'
 import type { Attachment } from '@/lib/attachments'
 import { ProjectSources } from '@/components/ProjectSources'
+import { attachmentKey } from '@/lib/projectSources'
 import { folderName, pickWorkspace, releaseWorkspace } from '@/lib/agent/tools'
 import { IS_TAURI } from '@/lib/transport'
 import { ProjectDialog } from '@/components/ProjectDialog'
@@ -43,9 +48,10 @@ export type View = 'chat'
 // Espace affiché au lancement : le dernier utilisé (simple préférence, rien de secret).
 const SPACE_KEY = 'freellm-chat:space'
 
-function readSpace(): Space {
+function readSpace(): AppSpace {
   try {
-    return localStorage.getItem(SPACE_KEY) === 'code' ? 'code' : 'chat'
+    const stored = localStorage.getItem(SPACE_KEY)
+    return stored === 'code' || stored === 'brain' ? stored : 'chat'
   } catch {
     return 'chat'
   }
@@ -73,7 +79,9 @@ export default function App() {
   const [modelsVersion, setModelsVersion] = useState(0)
   const { isVisionModel, isToolModel } = useModelCapabilities(settings?.hasKey ?? false, modelsVersion)
   const projects = useProjects()
+  const brain = useBrain()
   const chat = useChat({
+    brainItems: brain.items,
     onMissingKey: () => openSettings('connection'),
     isVisionModel,
     isToolModel,
@@ -86,7 +94,9 @@ export default function App() {
 
   // Espace Chat / Code. Une conversation ou un projet ouvert impose son espace : on se synchronise
   // pendant le rendu (pas dans un effet), comme pour les projets dépliés de la barre latérale.
-  const [space, setSpace] = useState<Space>(readSpace)
+  const [space, setSpace] = useState<AppSpace>(readSpace)
+  // Fenêtre d'un élément du cerveau : null = fermée ; { id: null } = nouvelle note.
+  const [brainEditor, setBrainEditor] = useState<{ id: string | null } | null>(null)
   const imposedSpace = chat.active
     ? conversationSpace(chat.active, projects.getProject)
     : activeProject
@@ -140,7 +150,7 @@ export default function App() {
   }, [])
 
   /** Changer d'espace : on quitte la conversation ouverte pour l'accueil de l'autre espace. */
-  function changeSpace(next: Space) {
+  function changeSpace(next: AppSpace) {
     setMobileSidebarOpen(false)
     if (next === space && !active) return
     chat.newConversation(null)
@@ -184,16 +194,19 @@ export default function App() {
     if (workspace && !used) void releaseWorkspace(workspace)
   }
 
-  /** Sources du projet › « Ajouter au projet » : le document devient un fichier de référence (mêmes limites que dans la fenêtre du projet). */
+  /** Sources du projet › « Ajouter au projet » : le document va dans le cerveau, rangé dans le projet (mêmes limites que dans la fenêtre du projet). */
   function addProjectFile(project: Project, file: Attachment): string | null {
-    if (file.kind !== 'text' || !file.text) return 'Seuls les fichiers texte peuvent être ajoutés au projet.'
-    if (project.files.length >= PROJECT_LIMITS.files) return `${PROJECT_LIMITS.files} fichiers maximum par projet.`
-    if (filesChars(project.files) + file.text.length > PROJECT_LIMITS.filesChars) {
-      return `« ${file.name} » ne rentre pas : les fichiers du projet sont limités à ${PROJECT_LIMITS.filesChars.toLocaleString('fr-FR')} caractères.`
-    }
-    projects.updateProject(project.id, { files: [...project.files, { ...file, id: crypto.randomUUID() }] })
-    return null
+    return brain.keepFile(file, project.id).error ?? null
   }
+
+  /** « Garder dans le cerveau » sous une réponse : on garde aussi la question, pour le titre. */
+  function saveReply(messageId: string, answer: string) {
+    if (!active) return
+    const index = active.messages.findIndex((m) => m.id === messageId)
+    const question = active.messages.slice(0, index).findLast((m) => m.role === 'user')?.content ?? ''
+    brain.saveReply({ conversationId: active.id, messageId, question, answer })
+  }
+  const savedIds = new Set(brain.items.flatMap((i) => (i.origin?.messageId ? [i.origin.messageId] : [])))
 
   const sidebarProps = {
     conversations: chat.conversations,
@@ -239,11 +252,21 @@ export default function App() {
       releaseIfUnused(projects.getProject(id)?.workspace, id)
       void projects.deleteProject(id)
       chat.detachProject(id)
+      brain.detachProject(id)
     },
     onMove: chat.moveConversation,
     space,
     onSpaceChange: changeSpace,
     onAddCodeProject: () => void addCodeProject(),
+    brainItems: brain.items,
+    onNewNote: () => {
+      setMobileSidebarOpen(false)
+      setBrainEditor({ id: null })
+    },
+    onOpenNote: (id: string) => {
+      setMobileSidebarOpen(false)
+      setBrainEditor({ id })
+    },
   }
 
   // /usage : petite carte au-dessus du champ (fermée en changeant de conversation).
@@ -256,6 +279,9 @@ export default function App() {
     newConversation,
     showUsage: () => setUsageFor(place),
     custom: prefs.commands,
+    saveNote: (text) => {
+      brain.quickNote(text)
+    },
   })
 
   const composer = (
@@ -270,7 +296,9 @@ export default function App() {
         />
       )}
       <Composer
-        onSend={chat.send}
+        // Espace Cerveau : la question part dans une conversation du Chat, avec la recherche dans les notes.
+        onSend={space === 'brain' ? (text, files) => chat.send(text, files, { brain: true }) : chat.send}
+        placeholder={space === 'brain' ? 'Demande quelque chose à ton cerveau…' : undefined}
         onStop={chat.stop}
         isStreaming={activeIsStreaming}
         busy={isStreaming && !activeIsStreaming}
@@ -348,7 +376,7 @@ export default function App() {
             )}
             <span className="pointer-events-none min-w-0 truncate px-2 text-sm font-medium">
               {activeProject && active && <span className="text-muted-foreground">{activeProject.name} / </span>}
-              {active?.title ?? activeProject?.name ?? (space === 'code' ? 'Code' : 'Nouvelle conversation')}
+              {active?.title ?? activeProject?.name ?? (space === 'code' ? 'Code' : space === 'brain' ? 'Cerveau' : 'Nouvelle conversation')}
             </span>
             <div className="ml-auto flex items-center gap-1">
               <IconButton label="Réglages du modèle" onClick={() => openSettings('model')} className="relative">
@@ -394,9 +422,21 @@ export default function App() {
               conversations={chat.conversations.filter((c) => c.projectId === activeProject.id)}
               composer={composer}
               widthClass={widthClass}
+              files={brain.projectFiles(activeProject.id)}
               onEdit={() => setProjectDialog({ id: activeProject.id })}
               onSelect={chat.selectConversation}
               onAddFile={(file) => addProjectFile(activeProject, file)}
+            />
+          ) : isEmpty && space === 'brain' ? (
+            <BrainHome
+              brain={brain}
+              projects={projects.projects}
+              conversations={chat.conversations}
+              composer={composer}
+              widthClass={widthClass}
+              onOpen={(id) => setBrainEditor({ id })}
+              onNew={() => setBrainEditor({ id: null })}
+              onSelectConversation={chat.selectConversation}
             />
           ) : isEmpty && space === 'code' ? (
             // Accueil de l'espace Code : choisir (ou ajouter) le projet sur lequel on travaille.
@@ -431,6 +471,8 @@ export default function App() {
                 canRetry={!isStreaming && activeError !== null}
                 onRetry={chat.retry}
                 widthClass={widthClass}
+                savedIds={savedIds}
+                onSave={saveReply}
               />
               <div className={cn('mx-auto w-full px-4 pb-4', widthClass)}>
                 {composer}
@@ -448,18 +490,36 @@ export default function App() {
           project={projectDialog.id ? (projects.getProject(projectDialog.id) ?? null) : null}
           space={projectDialog.space}
           conversations={chat.conversations}
+          files={projectDialog.id ? brain.projectFiles(projectDialog.id) : []}
           onClose={() => setProjectDialog(null)}
           onForgetSummary={chat.forgetSummary}
-          onSave={(draft) => {
+          onSave={({ files, ...draft }) => {
             if (projectDialog.id) {
               const before = projects.getProject(projectDialog.id)?.workspace
               if (before !== draft.workspace) releaseIfUnused(before, projectDialog.id)
               projects.updateProject(projectDialog.id, draft)
+              brain.setProjectFiles(projectDialog.id, files)
             } else {
               const created = projects.createProject({ ...draft, ...(projectDialog.space === 'code' && { space: 'code' as const }) })
+              brain.setProjectFiles(created.id, files)
               chat.newConversation(created.id) // on ouvre le nouveau projet
             }
             setProjectDialog(null)
+          }}
+        />
+      )}
+
+      {brainEditor && (
+        <BrainEditor
+          key={brainEditor.id ?? 'new'}
+          id={brainEditor.id}
+          brain={brain}
+          projects={projects.projects}
+          conversations={chat.conversations}
+          onClose={() => setBrainEditor(null)}
+          onOpenConversation={(id) => {
+            setBrainEditor(null)
+            chat.selectConversation(id)
           }}
         />
       )}
@@ -490,6 +550,7 @@ function ProjectHome({
   conversations,
   composer,
   widthClass,
+  files,
   onEdit,
   onSelect,
   onAddFile,
@@ -498,6 +559,8 @@ function ProjectHome({
   conversations: Conversation[]
   composer: ReactNode
   widthClass: string
+  /** Fichiers de référence (éléments du cerveau rangés dans le projet). */
+  files: Attachment[]
   onEdit: () => void
   onSelect: (id: string) => void
   onAddFile: (file: Attachment) => string | null
@@ -506,7 +569,7 @@ function ProjectHome({
   const details = [
     code && (project.workspace ? `dossier ${folderName(project.workspace)}` : IS_TAURI ? 'aucun dossier' : 'JavaScript seulement'),
     project.instructions.trim() && 'instructions',
-    project.files.length > 0 && `${project.files.length} fichier${project.files.length > 1 ? 's' : ''}`,
+    files.length > 0 && `${files.length} fichier${files.length > 1 ? 's' : ''}`,
     project.memory && 'mémoire activée',
   ].filter(Boolean)
   return (
@@ -544,7 +607,12 @@ function ProjectHome({
             </ul>
           </section>
         )}
-        <ProjectSources project={project} conversations={conversations} onSelect={onSelect} onAddFile={onAddFile} />
+        <ProjectSources
+          conversations={conversations}
+          knownFiles={new Set(files.map(attachmentKey))}
+          onSelect={onSelect}
+          onAddFile={onAddFile}
+        />
       </Appear>
     </div>
   )
@@ -601,5 +669,46 @@ function CodeHome({
         </Button>
       </Appear>
     </div>
+  )
+}
+
+/** Fenêtre d'un élément du cerveau, branchée sur l'état (création, enregistrement, suppression). */
+function BrainEditor({
+  id,
+  brain,
+  projects,
+  conversations,
+  onClose,
+  onOpenConversation,
+}: {
+  id: string | null
+  brain: ReturnType<typeof useBrain>
+  projects: Project[]
+  conversations: Conversation[]
+  onClose: () => void
+  onOpenConversation: (id: string) => void
+}) {
+  const item = id ? (brain.getItem(id) ?? null) : null
+  if (id && !item) return null // supprimé entre-temps
+  const originId = item?.origin?.conversationId
+  return (
+    <BrainItemDialog
+      item={item}
+      items={brain.items}
+      projects={projects}
+      canOpenOrigin={Boolean(originId && conversations.some((c) => c.id === originId))}
+      onClose={onClose}
+      onOpenOrigin={() => originId && onOpenConversation(originId)}
+      onDelete={() => {
+        if (item) brain.remove(item.id)
+        onClose()
+      }}
+      onSave={(draft) => {
+        const title = draft.title.trim() || firstLine(draft.content)
+        if (item) brain.update(item.id, { ...draft, title })
+        else brain.create({ kind: 'note', ...draft, title })
+        onClose()
+      }}
+    />
   )
 }
