@@ -10,7 +10,7 @@
  *     et si le navigateur annule (bouton Stop), la requête amont est coupée aussi.
  *
  *  3. /admin/* : statistiques de FreeLLMAPI (analytique, journaux, scores, utilisation) en lecture,
- *     plus TROIS écritures précises (activer un modèle, ajouter / supprimer une clé de fournisseur).
+ *     plus QUATRE écritures précises (activer un modèle, stratégie de routage, ajouter / supprimer une clé).
  *     Tout le reste est refusé. Voir la section dédiée plus bas.
  *
  * Dans l'appli Tauri, ce rôle est tenu par la partie Rust (src-tauri/src/proxy.rs et admin.rs).
@@ -266,7 +266,7 @@ function proxyToFreeLLM(req: IncomingMessage, res: ServerResponse): void {
 //  - il reste ici, en mémoire : le navigateur ne le voit jamais ;
 //  - en GET, seules les routes de lecture listées ci-dessous passent. Aucune ne renvoie une clé
 //    en clair (/api/keys ne donne que des clés masquées ; /api/keys/export et /reveal restent bloquées) ;
-//  - en écriture, seules trois opérations passent (voir adminWrite), avec un corps REVALIDÉ et
+//  - en écriture, seules quatre opérations passent (voir adminWrite), avec un corps REVALIDÉ et
 //    reconstruit ici : on ne relaie jamais tel quel ce qu'envoie la page.
 
 const ADMIN_ROUTES: RegExp[] = [
@@ -296,6 +296,8 @@ const PLATFORM_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/
 // Clé d'un fournisseur : ASCII imprimable sans espace (comme notre propre clé), 4096 caractères max.
 const PROVIDER_KEY_PATTERN = /^[\x21-\x7E]{1,4096}$/
 
+const ROUTING_STRATEGIES = ['priority', 'balanced', 'smartest', 'fastest', 'reliable', 'custom', 'decision']
+
 export interface AdminWrite {
   method: 'PUT' | 'POST' | 'DELETE'
   apiPath: string
@@ -305,6 +307,7 @@ export interface AdminWrite {
 /**
  * Les seules écritures autorisées. Renvoie la requête à faire (corps reconstruit), ou un message d'erreur.
  *  - PUT    /admin/fallback   : activer / désactiver des modèles  [{ modelDbId, priority, enabled }]
+ *  - PUT    /admin/fallback/routing : stratégie de routage     { strategy, weights? } (rien d'autre)
  *  - POST   /admin/keys       : ajouter une clé de fournisseur     { platform, key?, label? } (pas de proxyUrl)
  *  - DELETE /admin/keys/<id>  : supprimer une clé
  */
@@ -325,6 +328,25 @@ export function adminWrite(method: string, url: string, body: unknown): AdminWri
       entries.push({ modelDbId: modelDbId as number, priority: priority as number, enabled })
     }
     return { method: 'PUT', apiPath: '/api/fallback', body: JSON.stringify(entries) }
+  }
+
+  if (method === 'PUT' && url === '/admin/fallback/routing') {
+    // FreeLLMAPI ne modifie que les champs reçus : en n'envoyant que ceux-là, on ne touche pas
+    // aux autres réglages du routeur (heures de pointe, modèle de décision, cooldowns…).
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) return 'Objet JSON attendu.'
+    const { strategy, weights } = body as Record<string, unknown>
+    if (typeof strategy !== 'string' || !ROUTING_STRATEGIES.includes(strategy)) return 'Stratégie inconnue.'
+    if (weights === undefined) return { method: 'PUT', apiPath: '/api/fallback/routing', body: JSON.stringify({ strategy }) }
+    const w = (weights ?? {}) as Record<string, unknown>
+    const values = (['reliability', 'speed', 'intelligence'] as const).map((k) => w[k])
+    if (!values.every((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1000) || values.every((v) => v === 0))
+      return 'Poids invalides.'
+    const [reliability, speed, intelligence] = values as number[]
+    return {
+      method: 'PUT',
+      apiPath: '/api/fallback/routing',
+      body: JSON.stringify({ strategy, weights: { reliability, speed, intelligence } }),
+    }
   }
 
   if (method === 'POST' && url === '/admin/keys') {

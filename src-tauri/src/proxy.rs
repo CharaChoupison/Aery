@@ -158,7 +158,7 @@ pub fn proxy_request(
     Ok(())
 }
 
-/// Relais des routes /admin/* : lectures en liste blanche + trois écritures validées (voir admin.rs).
+/// Relais des routes /admin/* : lectures en liste blanche + quatre écritures validées (voir admin.rs).
 /// Le jeton du dashboard reste côté Rust.
 fn admin_request(
     app: AppHandle,

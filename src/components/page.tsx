@@ -1,6 +1,7 @@
 import { CircleAlert, LoaderCircle, RefreshCw, type LucideIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useLayoutEffect, useRef, type ReactNode } from 'react'
 import { IconButton } from '@/components/IconButton'
+import { gsap, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 
 /** Titre + description d'une page, avec des actions à droite (période, rafraîchir…). */
@@ -59,8 +60,24 @@ export function Segmented<T extends string>({
   label: string
   size?: 'sm' | 'default'
 }) {
+  const groupRef = useRef<HTMLDivElement>(null)
+  const pillRef = useRef<HTMLSpanElement>(null)
+  const placedRef = useRef(false)
+  const motion = useMotion()
+
+  // La pastille de fond glisse sous le bouton choisi (posée sans animation au premier affichage).
+  useLayoutEffect(() => {
+    const selected = groupRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')
+    if (!selected || !pillRef.current) return
+    const target = { x: selected.offsetLeft, width: selected.offsetWidth, autoAlpha: 1 }
+    if (!placedRef.current || !motion) gsap.set(pillRef.current, target)
+    else gsap.to(pillRef.current, { ...target, duration: 0.35, ease: 'power3.out' })
+    placedRef.current = true
+  }, [value, motion])
+
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-xl border bg-muted/40 p-0.5">
+    <div ref={groupRef} role="radiogroup" aria-label={label} className="relative inline-flex rounded-xl border bg-muted/40 p-0.5">
+      <span ref={pillRef} aria-hidden className="invisible absolute top-0.5 bottom-0.5 left-0 rounded-[10px] bg-primary shadow-sm" />
       {options.map((o) => {
         const selected = o.value === value
         return (
@@ -73,10 +90,10 @@ export function Segmented<T extends string>({
             aria-label={o.title}
             onClick={() => onChange(o.value)}
             className={cn(
-              'flex items-center justify-center gap-1.5 rounded-[10px] font-medium whitespace-nowrap transition-colors outline-none',
+              'relative flex items-center justify-center gap-1.5 rounded-[10px] font-medium whitespace-nowrap transition-colors duration-300 outline-none',
               'focus-visible:ring-2 focus-visible:ring-ring/50',
               size === 'sm' ? 'h-7 px-2 text-xs' : 'h-8 px-3 text-sm',
-              selected ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+              selected ? 'text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {o.label}

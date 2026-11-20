@@ -1,4 +1,4 @@
-import { ChevronsUpDown, CircleAlert, CircleCheck, Eye, EyeOff, Info, KeyRound, LoaderCircle, Plus, Trash2 } from 'lucide-react'
+import { CircleAlert, CircleCheck, Eye, EyeOff, Info, KeyRound, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Badge, RefreshButton } from '@/components/page'
 import { Group, Notice, Row } from '@/components/settings/layout'
@@ -239,7 +239,6 @@ function AddKeyForm({ providers, onAdded }: { providers: Provider[]; onAdded: ()
                 render={<Button variant="outline" className="h-9 w-56 justify-between gap-2 px-3 font-normal" aria-label="Choisir un fournisseur" />}
               >
                 <span className={cn('truncate', !provider && 'text-muted-foreground')}>{provider?.name ?? 'Choisir…'}</span>
-                <ChevronsUpDown className="size-4 text-muted-foreground" aria-hidden />
               </ComboboxTrigger>
               <ComboboxContent align="end" className="w-[min(20rem,calc(100vw-2rem))]">
                 <ComboboxInput showTrigger={false} placeholder="Rechercher un fournisseur…" />

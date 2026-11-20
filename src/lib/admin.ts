@@ -224,6 +224,27 @@ export function setModelsEnabled(models: Pick<ChainModel, 'modelDbId' | 'priorit
 }
 export const getRouting = (signal?: AbortSignal) => adminGet<Routing>('fallback/routing', signal)
 
+export type Weights = Routing['weights']
+
+/** Change la stratégie du routeur (et ses poids si elle est « custom »). Rien d'autre n'est modifié. */
+export function setRouting(strategy: string, weights?: Weights) {
+  return adminRequest<{ strategy: string; weights: Weights }>('fallback/routing', {
+    method: 'PUT',
+    body: weights ? { strategy, weights } : { strategy },
+  })
+}
+
+/** Stratégies proposées, avec ce qu'elles font. « decision » n'est affichée que si elle est déjà active. */
+export const STRATEGY_HELP: Record<string, string> = {
+  priority: 'Suit simplement l’ordre de ta chaîne de repli, sans tenir compte des scores.',
+  balanced: 'La fiabilité d’abord, puis vitesse et intelligence à parts égales.',
+  smartest: 'Privilégie les modèles les plus intelligents, sans oublier la fiabilité.',
+  fastest: 'Privilégie les modèles les plus rapides, sans oublier la fiabilité.',
+  reliable: 'Presque tout sur la fiabilité : pour que ça marche du premier coup.',
+  custom: 'Tu règles toi-même le poids de chaque critère.',
+  decision: 'Un petit modèle choisit la stratégie la plus adaptée à chaque demande.',
+}
+
 /** Noms des stratégies de routage, comme dans le dashboard de FreeLLMAPI. */
 export const STRATEGY_LABELS: Record<string, string> = {
   priority: 'Manuel',

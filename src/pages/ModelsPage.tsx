@@ -1,12 +1,27 @@
-import { Eye, KeyRound, Route, Search, Wrench } from 'lucide-react'
+import { Eye, KeyRound, LoaderCircle, Route, Search, Wrench } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { AnimatedNumber } from '@/components/AnimatedNumber'
 import { Appear } from '@/components/Appear'
 import { Badge, Card, ErrorNotice, RefreshButton, Segmented } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useAdminData } from '@/hooks/useAdminData'
-import { formatContext, getChain, getRouting, setModelsEnabled, STRATEGY_LABELS, type ChainModel, type ModelScore } from '@/lib/admin'
+import {
+  formatContext,
+  getChain,
+  getRouting,
+  setModelsEnabled,
+  setRouting,
+  STRATEGY_HELP,
+  STRATEGY_LABELS,
+  type ChainModel,
+  type ModelScore,
+  type Routing,
+  type Weights,
+} from '@/lib/admin'
+import { SelectControl } from '@/components/settings/layout'
+import { Slider } from '@/components/ui/slider'
 import { ApiError } from '@/lib/api'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
@@ -83,7 +98,6 @@ function limitLabel(m: ChainModel): string | null {
   return null
 }
 
-const percent = (n: number) => `${Math.round(n * 100)} %`
 
 /** Modèles de la chaîne de repli, avec un interrupteur pour activer / désactiver chacun. */
 export function ModelsPage({ onChanged }: { onChanged?: () => void }) {
@@ -167,26 +181,13 @@ export function ModelsPage({ onChanged }: { onChanged?: () => void }) {
 
       {routing.data && weights && (
         <Appear>
-          <Card>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-muted">
-                  <Route className="size-4" aria-hidden />
-                </span>
-                <div>
-                  <p className="text-xs text-muted-foreground">Stratégie de routage</p>
-                  <p className="font-medium">{STRATEGY_LABELS[routing.data.strategy] ?? routing.data.strategy}</p>
-                </div>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                fiabilité {percent(weights.reliability)} · vitesse {percent(weights.speed)} · intelligence{' '}
-                {percent(weights.intelligence)}
-              </p>
-            </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Pour changer de stratégie ou l’ordre de la chaîne, passe par le dashboard de FreeLLMAPI.
-            </p>
-          </Card>
+          <RoutingCard
+            routing={routing.data}
+            onChanged={() => {
+              routing.reload()
+              onChanged?.()
+            }}
+          />
         </Appear>
       )}
 
@@ -220,7 +221,7 @@ export function ModelsPage({ onChanged }: { onChanged?: () => void }) {
       <div className="-mt-2 flex flex-wrap items-center justify-between gap-3">
         {chain.data && (
           <p className="text-sm text-muted-foreground">
-            {enabledCount} des {visible.length} modèle{visible.length > 1 ? 's' : ''} affiché{visible.length > 1 ? 's' : ''} sont actifs
+            <AnimatedNumber value={enabledCount} format={(n) => String(Math.round(n))} className="tabular-nums" /> des {visible.length} modèle{visible.length > 1 ? 's' : ''} affiché{visible.length > 1 ? 's' : ''} sont actifs
             dans la chaîne
           </p>
         )}
@@ -252,13 +253,17 @@ function FilterToggle({
   icon: typeof Eye
   label: string
 }) {
+  const motion = useMotion()
   return (
     <button
       type="button"
       aria-pressed={pressed}
-      onClick={() => onChange(!pressed)}
+      onClick={(e) => {
+        if (motion) gsap.fromTo(e.currentTarget, { scale: 0.92 }, { scale: 1, duration: 0.45, ease: 'back.out(3)', clearProps: 'transform' })
+        onChange(!pressed)
+      }}
       className={cn(
-        'flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+        'flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors duration-300 outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
         pressed ? 'border-primary bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
       )}
     >
@@ -287,7 +292,7 @@ function ModelsTable({ rows, onToggle }: { rows: Row[]; onToggle: (row: Row, ena
 
   return (
     <div className="overflow-x-auto rounded-2xl border bg-card">
-      <table className="w-full min-w-[46rem] text-sm">
+      <table className="w-full min-w-[40rem] text-sm">
         <thead className="border-b text-left text-xs text-muted-foreground">
           <tr>
             <th scope="col" className="w-10 py-3 pl-4 font-medium">
@@ -297,7 +302,7 @@ function ModelsTable({ rows, onToggle }: { rows: Row[]; onToggle: (row: Row, ena
               Modèle
             </th>
             {AXES.map((a) => (
-              <th key={a.key} scope="col" className="w-28 py-3 pr-4 font-medium">
+              <th key={a.key} scope="col" className="w-24 py-3 pr-3 font-medium">
                 <span className="flex items-center gap-1.5">
                   <span className="size-2 rounded-full" style={{ background: a.color }} aria-hidden />
                   {a.label}
@@ -307,7 +312,7 @@ function ModelsTable({ rows, onToggle }: { rows: Row[]; onToggle: (row: Row, ena
             <th scope="col" className="w-16 py-3 pr-4 text-right font-medium">
               Score
             </th>
-            <th scope="col" className="w-24 py-3 pr-4 text-right font-medium">
+            <th scope="col" className="w-20 py-3 pr-4 text-right font-medium">
               Actif
             </th>
           </tr>
@@ -327,8 +332,8 @@ function ModelsTable({ rows, onToggle }: { rows: Row[]; onToggle: (row: Row, ena
             const providers = [...new Set(r.members.map((x) => x.platform))]
             return (
               <tr key={r.key} className="border-b last:border-0 hover:bg-muted/40">
-                <td className={cn('py-3 pl-4 text-muted-foreground tabular-nums', !r.enabled && 'opacity-60')}>{r.rank}</td>
-                <td className={cn('py-3 pr-4', !r.enabled && 'opacity-60')}>
+                <td className={cn('py-3 pl-4 text-muted-foreground tabular-nums transition-opacity duration-300', !r.enabled && 'opacity-60')}>{r.rank}</td>
+                <td className={cn('py-3 pr-4 transition-opacity duration-300', !r.enabled && 'opacity-60')}>
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="font-medium" title={r.members.map((x) => `${x.platform} : ${x.modelId}`).join('\n')}>
                       {r.label}
@@ -351,11 +356,13 @@ function ModelsTable({ rows, onToggle }: { rows: Row[]; onToggle: (row: Row, ena
                   </div>
                 </td>
                 {AXES.map((a) => (
-                  <td key={a.key} className="py-3 pr-4">
+                  <td key={a.key} className={cn('py-3 pr-3 transition-opacity duration-300', !r.enabled && 'opacity-60')}>
                     {m.scores ? <ScoreBar value={m.scores[a.key]} color={a.color} /> : <span className="text-muted-foreground">–</span>}
                   </td>
                 ))}
-                <td className="py-3 pr-4 text-right font-mono tabular-nums">{m.scores ? m.scores.score.toFixed(3) : '–'}</td>
+                <td className={cn('py-3 pr-4 text-right font-mono tabular-nums transition-opacity duration-300', !r.enabled && 'opacity-60')}>
+                  {m.scores ? <AnimatedNumber value={m.scores.score} format={(n) => n.toFixed(3)} /> : '–'}
+                </td>
                 <td className="py-3 pr-4 text-right">
                   <ToggleCell row={r} onToggle={onToggle} />
                 </td>
@@ -375,7 +382,7 @@ function ScoreBar({ value, color }: { value: number; color: string }) {
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div data-score-bar className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
       </div>
-      <span className="w-7 text-right text-xs text-muted-foreground tabular-nums">{pct}</span>
+      <AnimatedNumber value={pct} format={(n) => String(Math.round(n))} className="w-7 text-right text-xs text-muted-foreground tabular-nums" />
     </div>
   )
 }
@@ -392,4 +399,148 @@ function ToggleCell({ row, onToggle }: { row: Row; onToggle: (row: Row, enabled:
       title={row.enabled ? 'Actif : le routeur peut l’utiliser' : 'Désactivé : jamais utilisé'}
     />
   )
+}
+
+/** Les poids du routeur en une barre à trois couleurs, qui se remplit à l'affichage. */
+function WeightsBar({ weights }: { weights: { reliability: number; speed: number; intelligence: number } }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const motion = useMotion()
+  const total = weights.reliability + weights.speed + weights.intelligence || 1
+  useGSAP(
+    () => {
+      if (motion) gsap.from('[data-weight]', { scaleX: 0, transformOrigin: '0% 50%', duration: 0.7, stagger: 0.12, ease: 'power3.out' })
+    },
+    { scope: ref, dependencies: [weights.reliability, weights.speed, weights.intelligence] },
+  )
+  return (
+    <div ref={ref} className="mt-3 flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
+      {AXES.map((a) => (
+        <div key={a.key} data-weight className="h-full rounded-full" style={{ width: `${(weights[a.key] / total) * 100}%`, background: a.color }} />
+      ))}
+    </div>
+  )
+}
+
+const AXIS_KEYS = ['reliability', 'speed', 'intelligence'] as const
+
+/** Stratégie de routage : choix du préréglage, et curseurs de poids en mode « Personnalisé ». */
+function RoutingCard({ routing, onChanged }: { routing: Routing; onChanged: () => void }) {
+  // Affichage immédiat du choix (puis FreeLLMAPI confirme, et les scores se recalculent).
+  const [strategy, setStrategy] = useState(routing.strategy)
+  const [draft, setDraft] = useState<Weights>(routing.weights)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Nouvelles données de FreeLLMAPI : on s'aligne dessus (pendant le rendu, plutôt qu'avec un effet).
+  const [synced, setSynced] = useState(routing)
+  if (synced !== routing) {
+    setSynced(routing)
+    setStrategy(routing.strategy)
+    setDraft(routing.weights)
+  }
+
+  const options = Object.keys(STRATEGY_HELP)
+    .filter((id) => id !== 'decision' || routing.strategy === 'decision')
+    .map((id) => ({ value: id, label: STRATEGY_LABELS[id] ?? id }))
+  const total = draft.reliability + draft.speed + draft.intelligence || 1
+  const percent = (v: number) => `${Math.round((v / total) * 100)} %`
+
+  async function save(next: string, weights?: Weights) {
+    setStrategy(next)
+    setSaving(true)
+    setError(null)
+    try {
+      await setRouting(next, weights)
+      onChanged()
+    } catch (e) {
+      setStrategy(routing.strategy)
+      setDraft(routing.weights)
+      setError(e instanceof ApiError ? e.message : 'Changement de stratégie impossible.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted">
+            <Route className="size-4" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Stratégie de routage</p>
+            <p className="text-sm text-muted-foreground">{STRATEGY_HELP[strategy] ?? ''}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {saving && <LoaderCircle className="size-4 animate-spin text-muted-foreground" aria-label="Enregistrement" />}
+          <SelectControl
+            label="Stratégie de routage"
+            value={strategy}
+            options={options}
+            // Passer en « Personnalisé » part des poids actuels : rien ne change tant qu'on ne touche pas aux curseurs.
+            onChange={(next) => void save(next, next === 'custom' ? draft : undefined)}
+          />
+        </div>
+      </div>
+
+      <WeightsBar weights={draft} />
+      <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {AXES.map((a) => (
+          <span key={a.key} className="flex items-center gap-1.5">
+            <span className="size-2 rounded-full" style={{ background: a.color }} aria-hidden />
+            {a.label} {percent(draft[a.key])}
+          </span>
+        ))}
+      </p>
+
+      {strategy === 'custom' && (
+        <Appear from={{ autoAlpha: 0, y: -6 }} className="mt-4 grid gap-4 sm:grid-cols-3">
+          {AXES.map((a) => (
+            <div key={a.key}>
+              <p className="mb-2 flex justify-between text-sm">
+                <span>{a.label}</span>
+                <span className="text-muted-foreground tabular-nums">{percent(draft[a.key])}</span>
+              </p>
+              <Slider
+                value={[Math.round((draft[a.key] / total) * 100)]}
+                min={0}
+                max={100}
+                step={5}
+                aria-label={`Poids : ${a.label}`}
+                onValueChange={(v) => {
+                  const n = Array.isArray(v) ? v[0] : (v as number)
+                  setDraft((d) => ({ ...rebalance(d, a.key, n / 100) }))
+                }}
+                // Enregistré quand on relâche le curseur (pas à chaque pixel). On recalcule depuis la
+                // valeur relâchée : `draft` peut avoir un rendu de retard à cet instant.
+                onValueCommitted={(v) => {
+                  const n = Array.isArray(v) ? v[0] : (v as number)
+                  void save('custom', rebalance(draft, a.key, n / 100))
+                }}
+              />
+            </div>
+          ))}
+        </Appear>
+      )}
+
+      {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
+      <p className="mt-3 text-xs text-muted-foreground">L’ordre de la chaîne de repli se règle dans le dashboard de FreeLLMAPI.</p>
+    </Card>
+  )
+}
+
+/**
+ * Change un poids et répartit le reste entre les deux autres, au prorata (la somme reste 100 %).
+ * Ex. fiabilité 50 → 70 % : vitesse et intelligence se partagent les 30 % restants.
+ */
+function rebalance(weights: Weights, key: (typeof AXIS_KEYS)[number], value: number): Weights {
+  const total = weights.reliability + weights.speed + weights.intelligence || 1
+  const others = AXIS_KEYS.filter((k) => k !== key)
+  const othersSum = others.reduce((n, k) => n + weights[k] / total, 0)
+  const rest = 1 - value
+  const next = { ...weights, [key]: value } as Weights
+  for (const k of others) next[k] = othersSum > 0 ? ((weights[k] / total) / othersSum) * rest : rest / others.length
+  return next
 }

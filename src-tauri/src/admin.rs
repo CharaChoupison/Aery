@@ -1,5 +1,5 @@
 //! API d'admin de FreeLLMAPI : statistiques (analytique, journaux, scores, utilisation) en lecture,
-//! plus trois écritures précises (activer un modèle, ajouter / supprimer une clé de fournisseur).
+//! plus quatre écritures précises (activer un modèle, stratégie de routage, ajouter / supprimer une clé).
 //!
 //! Ces pages passent par l'API d'admin de FreeLLMAPI (/api/...), protégée par une session
 //! du dashboard (pas par la clé freellmapi-). L'appli desktop FreeLLMAPI donne cette session
@@ -53,6 +53,7 @@ fn is_platform(s: &str) -> bool {
 
 /// Les seules écritures autorisées (mêmes règles que `adminWrite` dans server/freellmPlugin.ts) :
 ///  - PUT    /admin/fallback   : activer / désactiver des modèles  [{ modelDbId, priority, enabled }]
+///  - PUT    /admin/fallback/routing : stratégie de routage     { strategy, weights? } (rien d'autre)
 ///  - POST   /admin/keys       : ajouter une clé de fournisseur     { platform, key?, label? } (pas de proxyUrl)
 ///  - DELETE /admin/keys/<id>  : supprimer une clé
 pub fn admin_write(method: &str, path: &str, body: Option<&str>) -> Result<Write, String> {
@@ -86,6 +87,27 @@ pub fn admin_write(method: &str, path: &str, body: Option<&str>) -> Result<Write
                 }
             }
             Ok((reqwest::Method::PUT, "/api/fallback".into(), Some(Value::Array(entries).to_string())))
+        }
+        ("PUT", "/admin/fallback/routing") => {
+            // FreeLLMAPI ne modifie que les champs reçus : on n'envoie que la stratégie (et les poids),
+            // sans toucher aux autres réglages du routeur.
+            const STRATEGIES: [&str; 7] = ["priority", "balanced", "smartest", "fastest", "reliable", "custom", "decision"];
+            let value = parse()?;
+            let object = value.as_object().ok_or("Objet JSON attendu.")?;
+            let strategy = object.get("strategy").and_then(Value::as_str).filter(|s| STRATEGIES.contains(s)).ok_or("Stratégie inconnue.")?;
+            let body = match object.get("weights") {
+                None => json!({ "strategy": strategy }),
+                Some(w) => {
+                    let get = |k: &str| w.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && (0.0..=1000.0).contains(v));
+                    match (get("reliability"), get("speed"), get("intelligence")) {
+                        (Some(r), Some(s), Some(i)) if r + s + i > 0.0 => {
+                            json!({ "strategy": strategy, "weights": { "reliability": r, "speed": s, "intelligence": i } })
+                        }
+                        _ => return Err("Poids invalides.".into()),
+                    }
+                }
+            };
+            Ok((reqwest::Method::PUT, "/api/fallback/routing".into(), Some(body.to_string())))
         }
         ("POST", "/admin/keys") => {
             let value = parse()?;
@@ -257,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn only_three_writes_are_allowed() {
+    fn only_four_writes_are_allowed() {
         // Activer / désactiver : le corps est reconstruit, les champs en trop disparaissent.
         let (m, path, body) = admin_write("PUT", "/admin/fallback", Some(r#"[{"modelDbId":3,"priority":1,"enabled":false,"x":1}]"#)).unwrap();
         assert_eq!((m, path.as_str()), (reqwest::Method::PUT, "/api/fallback"));
@@ -265,6 +287,17 @@ mod tests {
         assert!(admin_write("PUT", "/admin/fallback", Some("[]")).is_err());
         assert!(admin_write("PUT", "/admin/fallback", Some(r#"[{"modelDbId":-1,"priority":1,"enabled":true}]"#)).is_err());
         assert!(admin_write("PUT", "/admin/fallback", Some(r#"[{"modelDbId":1,"priority":1,"enabled":"oui"}]"#)).is_err());
+
+        // Stratégie : seuls strategy et weights passent (pas les heures de pointe, cooldowns…).
+        let (_, path, body) =
+            admin_write("PUT", "/admin/fallback/routing", Some(r#"{"strategy":"fastest","cooldownCeilingMs":60000,"peakHoursAdjust":true}"#)).unwrap();
+        assert_eq!((path.as_str(), body.unwrap().as_str()), ("/api/fallback/routing", r#"{"strategy":"fastest"}"#));
+        let (_, _, body) =
+            admin_write("PUT", "/admin/fallback/routing", Some(r#"{"strategy":"custom","weights":{"reliability":2,"speed":1,"intelligence":1,"x":5}}"#)).unwrap();
+        assert_eq!(body.unwrap(), r#"{"strategy":"custom","weights":{"intelligence":1.0,"reliability":2.0,"speed":1.0}}"#);
+        assert!(admin_write("PUT", "/admin/fallback/routing", Some(r#"{"strategy":"nimporte"}"#)).is_err());
+        assert!(admin_write("PUT", "/admin/fallback/routing", Some(r#"{"strategy":"custom","weights":{"reliability":0,"speed":0,"intelligence":0}}"#)).is_err());
+        assert!(admin_write("PUT", "/admin/fallback/routing", Some(r#"{"strategy":"custom","weights":{"reliability":-1,"speed":1,"intelligence":1}}"#)).is_err());
 
         // Ajout de clé : proxyUrl ignoré, nom nettoyé.
         let (_, path, body) =
