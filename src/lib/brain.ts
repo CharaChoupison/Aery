@@ -30,8 +30,33 @@ export interface BrainItem {
   url?: string
   /** Réponse gardée depuis le chat : pour pouvoir y retourner. */
   origin?: { conversationId: string; messageId?: string }
+  /**
+   * Dossier façon PARA (« 3 - Ressources/React »), choisi par le rangement ou à la main.
+   * Absent = pas encore rangé (« Boîte de réception »). Sert aussi de dossier à l'export Obsidian.
+   */
+  folder?: string
+  /** Notes liées (ids) : deviennent des liens [[…]] à l'export. */
+  links?: string[]
+  /** Note d'index (MOC) créée par le rangement : la liste des notes d'un thème. */
+  moc?: boolean
+  /** Dernier rangement de cet élément. Modifié après (updatedAt plus récent) = à ranger de nouveau. */
+  tidiedAt?: number
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * Copie d'un élément gardée AVANT une modification automatique (rangement) ou une restauration.
+ * Le contenu d'origine n'est donc jamais perdu.
+ */
+export interface BrainVersion {
+  id: string
+  itemId: string
+  /** Rangement qui a fait la modification (pour pouvoir l'annuler en entier). */
+  runId?: string
+  reason: 'tidy' | 'restore'
+  savedAt: number
+  item: BrainItem
 }
 
 export const BRAIN_LIMITS = {
@@ -64,7 +89,102 @@ export function sanitizeItem(item: BrainItem): BrainItem {
     content: item.content.slice(0, BRAIN_LIMITS.content),
     tags: parseTags(item.tags.join(',')),
     projectIds: [...new Set(item.projectIds)],
+    folder: item.folder ? sanitizeFolder(item.folder) || undefined : undefined,
+    links: item.links ? [...new Set(item.links)].filter((id) => id !== item.id).slice(0, 30) : undefined,
   }
+}
+
+// --- Dossiers (PARA) ---------------------------------------------------------------------
+
+/**
+ * Les grands dossiers de la méthode PARA (Tiago Forte) :
+ *  - Projets : ce qui a un objectif et une fin (un exposé, une appli) ;
+ *  - Domaines : ce qu'on suit dans la durée (études, santé, budget) ;
+ *  - Ressources : les sujets qui intéressent (React, recettes…) ;
+ *  - Archives : ce qui n'est plus actif.
+ * Les numéros gardent l'ordre dans Obsidian (tri alphabétique).
+ */
+export const INBOX_FOLDER = '0 - Boîte de réception'
+export const PARA_FOLDERS = ['1 - Projets', '2 - Domaines', '3 - Ressources', '4 - Archives'] as const
+
+/** Un nom de fichier ou de dossier sans caractères interdits (macOS, Windows, Obsidian). */
+export function safeName(name: string, max = 80): string {
+  return name
+    .replace(/[\\/:*?"<>|#^[\]{}\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '')
+    .slice(0, max)
+    .trim()
+}
+
+/** « ressources / React » → « 3 - Ressources/React ». Premier niveau = un dossier PARA, 2 niveaux max. '' si invalide. */
+export function sanitizeFolder(raw: string): string {
+  const parts = raw.split('/').map((p) => safeName(p, 40)).filter(Boolean)
+  if (parts.length === 0) return ''
+  const top = fold(parts[0]).replace(/^\d+\s*-?\s*/, '')
+  const para = [INBOX_FOLDER, ...PARA_FOLDERS].find((f) => {
+    const name = fold(f).replace(/^\d+ - /, '')
+    return top === name || top === name.replace(/s$/, '') || (name === 'boite de reception' && top === 'inbox')
+  })
+  if (!para) return ''
+  // Sous-dossier avec une majuscule : « react » et « React » ne font pas deux dossiers.
+  const sub = parts.slice(1, 2).map((p) => p.charAt(0).toLocaleUpperCase('fr') + p.slice(1))
+  return [para, ...sub].join('/')
+}
+
+/** Tous les dossiers utilisés, triés. */
+export function allFolders(items: BrainItem[]): string[] {
+  return [...new Set(items.flatMap((i) => (i.folder ? [i.folder] : [])))].sort((a, b) => a.localeCompare(b, 'fr'))
+}
+
+// --- Liens [[…]] (format Obsidian) --------------------------------------------------------
+
+const WIKILINK = /\[\[([^\]\n|#]+)(?:#[^\]\n|]*)?(?:\|([^\]\n]+))?\]\]/g
+
+/** Retrouve une note par son titre (sans accents ni majuscules). */
+export function findByTitle(items: BrainItem[], title: string): BrainItem | undefined {
+  const t = fold(title.trim())
+  return items.find((i) => fold(itemTitle(i)) === t) ?? items.find((i) => fold(safeName(itemTitle(i))) === fold(safeName(title)))
+}
+
+/**
+ * Pour l'affichage dans l'appli : [[Titre]] → lien Markdown vers la note (#note:<id>), que le
+ * rendu transforme en pastille cliquable. Un lien vers une note inconnue reste du texte.
+ */
+export function linkifyWikilinks(content: string, items: BrainItem[]): string {
+  return content.replace(WIKILINK, (_all, target: string, alias?: string) => {
+    const label = (alias ?? target).trim().replace(/[[\]]/g, '')
+    const found = findByTitle(items, target)
+    return found ? `[${label}](#note:${found.id})` : label
+  })
+}
+
+/** Titres cités en [[…]] dans un texte. */
+export function wikilinkTargets(content: string): string[] {
+  return [...content.matchAll(WIKILINK)].map((m) => m[1].trim())
+}
+
+/** Notes liées à `item` : ses liens, ses [[…]], et celles qui pointent vers lui (rétroliens). */
+export function relatedItems(item: BrainItem, items: BrainItem[]): { out: BrainItem[]; back: BrainItem[] } {
+  const byId = new Map(items.map((i) => [i.id, i]))
+  const out = new Map<string, BrainItem>()
+  for (const id of item.links ?? []) {
+    const found = byId.get(id)
+    if (found) out.set(found.id, found)
+  }
+  for (const title of wikilinkTargets(item.content)) {
+    const found = findByTitle(items, title)
+    if (found && found.id !== item.id) out.set(found.id, found)
+  }
+  const title = fold(itemTitle(item))
+  const back = items.filter(
+    (i) =>
+      i.id !== item.id &&
+      !out.has(i.id) &&
+      ((i.links ?? []).includes(item.id) || wikilinkTargets(i.content).some((t) => fold(t) === title)),
+  )
+  return { out: [...out.values()], back }
 }
 
 /** « React, idées ,  react » → ['react', 'idées'] : minuscules, sans #, sans doublon. */

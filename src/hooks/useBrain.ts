@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { chatCompletion } from '@/lib/api'
 import type { Attachment } from '@/lib/attachments'
-import { deleteBrainItemFromDb, loadBrain, saveBrainItems } from '@/lib/db'
+import { deleteBrainItemFromDb, loadBrain, saveBrainItems, saveBrainVersions } from '@/lib/db'
 import {
   BRAIN_LIMITS,
   ENRICH_PROMPT,
@@ -12,6 +12,7 @@ import {
   projectItems,
   sanitizeItem,
   type BrainItem,
+  type BrainVersion,
 } from '@/lib/brain'
 import { attachmentKey } from '@/lib/projectSources'
 import { PROJECT_LIMITS } from '@/lib/projects'
@@ -218,9 +219,55 @@ export function useBrain() {
     setItems(next)
   }, [])
 
+  /** Les éléments tels qu'ils sont maintenant (pas ceux du dernier rendu). */
+  const snapshot = useCallback(() => itemsRef.current, [])
+
+  /**
+   * Rangement : remplace les éléments modifiés et ajoute les nouveaux (notes d'index).
+   * Un élément modifié entre-temps (updatedAt différent de `before`) n'est PAS remplacé.
+   * Renvoie les ids réellement remplacés.
+   */
+  const commit = useCallback(
+    (changes: { before: BrainItem; after: BrainItem }[], created: BrainItem[] = []): Set<string> => {
+      const byId = new Map(changes.map((c) => [c.after.id, c]))
+      const applied = new Set<string>()
+      mutate((i) => {
+        const c = byId.get(i.id)
+        if (!c || i.updatedAt !== c.before.updatedAt) return i
+        applied.add(i.id)
+        return c.after
+      })
+      add(created)
+      return applied
+    },
+    [add, mutate],
+  )
+
+  /**
+   * Remet une ancienne version. La version actuelle est gardée d'abord (on peut revenir en arrière).
+   * Un élément supprimé entre-temps est recréé.
+   */
+  const restore = useCallback(
+    async (version: BrainVersion) => {
+      const current = itemsRef.current.find((i) => i.id === version.itemId)
+      if (current) {
+        await saveBrainVersions([{ id: crypto.randomUUID(), itemId: current.id, reason: 'restore', savedAt: Date.now(), item: current }])
+      }
+      // Considéré comme rangé : on ne veut pas que le prochain rangement refasse ce qu'on vient d'annuler.
+      const now = Date.now()
+      const restored = sanitizeItem({ ...version.item, updatedAt: now, tidiedAt: now })
+      if (current) mutate((i) => (i.id === restored.id ? restored : i))
+      else add([restored])
+    },
+    [add, mutate],
+  )
+
   return {
     items,
     loaded,
+    snapshot,
+    commit,
+    restore,
     error,
     create,
     update,

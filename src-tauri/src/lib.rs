@@ -4,13 +4,15 @@
 //!  - admin    : API d’admin FreeLLMAPI (statistiques en lecture + activer un modèle, stratégie de routage, ajouter/supprimer une clé) ;
 //!  - launcher : lance FreeLLMAPI en arrière-plan si elle n'est pas ouverte ;
 //!  - updates  : mise à jour de l'appli depuis le repo git du projet ;
-//!  - workspace : dossiers de travail de l'agent (lecture seule : lister, lire, chercher).
+//!  - workspace : dossiers de travail de l'agent (lecture seule : lister, lire, chercher) ;
+//!  - vault    : export du second cerveau en dossier Markdown (coffre Obsidian).
 
 mod admin;
 mod launcher;
 mod proxy;
 mod settings;
 mod updates;
+mod vault;
 mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +39,10 @@ pub fn run() {
             workspace::pick_workspace,
             workspace::workspace_tool,
             workspace::release_workspace,
+            vault::get_vault,
+            vault::pick_vault,
+            vault::forget_vault,
+            vault::export_vault,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'appli");

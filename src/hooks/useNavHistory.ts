@@ -11,6 +11,8 @@ export interface Place {
   projectId?: string | null
   /** Espace Chat, Code ou Cerveau (les accueils vides sont des endroits différents). */
   space: AppSpace
+  /** Note du cerveau ouverte en pleine page. */
+  noteId?: string | null
   /** Date de création de la conversation ouverte (pas comparée : sert à repérer une conversation neuve). */
   createdAt?: number
 }
@@ -27,7 +29,8 @@ function samePlace(a: Place, b: Place) {
     // l'espace que pour les accueils vides.
     (a.conversationId !== null || a.space === b.space) &&
     a.conversationId === b.conversationId &&
-    (a.projectId ?? null) === (b.projectId ?? null)
+    (a.projectId ?? null) === (b.projectId ?? null) &&
+    (a.noteId ?? null) === (b.noteId ?? null)
   )
 }
 
@@ -68,7 +71,7 @@ export function useNavHistory(current: Place, go: (place: Place) => void, exists
       const next = [...entries.slice(0, index + 1), entry].slice(-MAX_ENTRIES)
       return { entries: next, index: next.length - 1 }
     })
-  }, [current.view, current.conversationId, current.projectId, current.space])
+  }, [current.view, current.conversationId, current.projectId, current.space, current.noteId])
 
   /** Index du prochain endroit encore valide dans une direction (une conversation supprimée est sautée). */
   const target = useCallback(

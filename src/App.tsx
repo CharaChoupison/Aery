@@ -17,8 +17,9 @@ import { useModelCapabilities } from '@/hooks/useModelCapabilities'
 import { useProjects } from '@/hooks/useProjects'
 import { useBrain } from '@/hooks/useBrain'
 import { BrainHome } from '@/components/brain/BrainHome'
-import { BrainItemDialog } from '@/components/brain/BrainItemDialog'
-import { firstLine } from '@/lib/brain'
+import { BrainNotePage } from '@/components/brain/BrainNotePage'
+import { useBrainTidy } from '@/hooks/useBrainTidy'
+import { itemTitle } from '@/lib/brain'
 import { useSlashCommands } from '@/hooks/useSlashCommands'
 import { conversationSpace, projectSpace, type AppSpace, type Project, type Space } from '@/lib/projects'
 import type { Attachment } from '@/lib/attachments'
@@ -39,8 +40,8 @@ import { startUpdateChecks } from '@/lib/updates'
 import { dragRegion, TRAFFIC_LIGHTS_INSET, TRAFFIC_LIGHTS_INSET_NARROW, useTrafficLights } from '@/lib/titlebar'
 import { cn } from '@/lib/utils'
 
-/** Largeur de la barre latérale sur grand écran (w-64). */
-const SIDEBAR_WIDTH = 256
+/** Largeur de la barre latérale sur grand écran (w-72 = 288 px : les titres ont de la place, et les boutons de fenêtre en prennent 92). */
+const SIDEBAR_WIDTH = 288
 
 /** Ce qu'affiche la zone principale. Modèles, clés, utilisation et analytique sont dans les Paramètres. */
 export type View = 'chat'
@@ -95,8 +96,9 @@ export default function App() {
   // Espace Chat / Code. Une conversation ou un projet ouvert impose son espace : on se synchronise
   // pendant le rendu (pas dans un effet), comme pour les projets dépliés de la barre latérale.
   const [space, setSpace] = useState<AppSpace>(readSpace)
-  // Fenêtre d'un élément du cerveau : null = fermée ; { id: null } = nouvelle note.
-  const [brainEditor, setBrainEditor] = useState<{ id: string | null } | null>(null)
+  // Note du cerveau ouverte en pleine page (espace Cerveau), null = accueil du Cerveau.
+  const [noteId, setNoteId] = useState<string | null>(null)
+  const openNote = brain.items.find((i) => i.id === noteId)
   const imposedSpace = chat.active
     ? conversationSpace(chat.active, projects.getProject)
     : activeProject
@@ -113,6 +115,22 @@ export default function App() {
   const codeProjects = projects.projects.filter((p) => projectSpace(p) === 'code')
   const models = useModels(settings?.hasKey ?? false)
   const { active, activeError, isStreaming, streamingId } = chat
+  // Une conversation ouverte remplace la note (synchronisé pendant le rendu).
+  if (active && noteId) setNoteId(null)
+  // Rangement hebdomadaire du cerveau (et export Obsidian).
+  const tidy = useBrainTidy(brain, projects.projects, settings?.hasKey ?? false)
+
+  // Une note quittée vide (« Nouvelle note » sans rien écrire) est supprimée. Comparaison avec la
+  // note précédente dans le corps de l'effet (pas dans son nettoyage) : sûr avec le StrictMode.
+  const previousNote = useRef<string | null>(null)
+  const { snapshot: brainSnapshot, remove: removeBrainItem } = brain
+  useEffect(() => {
+    const prev = previousNote.current
+    previousNote.current = noteId
+    if (!prev || prev === noteId) return
+    const left = brainSnapshot().find((i) => i.id === prev)
+    if (left && left.kind === 'note' && !left.title.trim() && !left.content.trim() && left.tags.length === 0) removeBrainItem(prev)
+  }, [noteId, brainSnapshot, removeBrainItem])
   const activeIsStreaming = active !== null && streamingId === active.id
 
   // Précédent / Suivant : l'historique observe la page et la conversation ouvertes.
@@ -120,6 +138,7 @@ export default function App() {
   const goTo = useCallback(
     (place: Place) => {
       setSpace(place.space)
+      setNoteId(place.noteId ?? null)
       if (place.conversationId) selectConversation(place.conversationId)
       else resetConversation(place.projectId ?? null)
     },
@@ -128,11 +147,19 @@ export default function App() {
   const placeExists = useCallback(
     (place: Place) =>
       (!place.conversationId || conversations.some((c) => c.id === place.conversationId)) &&
-      (!place.projectId || projects.getProject(place.projectId) !== undefined),
-    [conversations, projects],
+      (!place.projectId || projects.getProject(place.projectId) !== undefined) &&
+      (!place.noteId || brain.items.some((i) => i.id === place.noteId)),
+    [conversations, projects, brain.items],
   )
   const nav = useNavHistory(
-    { view: 'chat', conversationId: active?.id ?? null, projectId: active ? null : chat.activeProjectId, space, createdAt: active?.createdAt },
+    {
+      view: 'chat',
+      conversationId: active?.id ?? null,
+      projectId: active ? null : chat.activeProjectId,
+      space,
+      noteId: active ? null : noteId,
+      createdAt: active?.createdAt,
+    },
     goTo,
     placeExists,
   )
@@ -152,9 +179,23 @@ export default function App() {
   /** Changer d'espace : on quitte la conversation ouverte pour l'accueil de l'autre espace. */
   function changeSpace(next: AppSpace) {
     setMobileSidebarOpen(false)
+    setNoteId(null)
     if (next === space && !active) return
     chat.newConversation(null)
     setSpace(next)
+  }
+
+  /** Ouvre une note du cerveau en pleine page (on quitte la conversation ouverte). */
+  function showNote(id: string) {
+    setMobileSidebarOpen(false)
+    if (active) chat.newConversation(null)
+    setSpace('brain')
+    setNoteId(id)
+  }
+
+  /** « Nouvelle note » : la page est créée tout de suite, comme dans Notion (supprimée si on la quitte vide). */
+  function newNote() {
+    showNote(brain.create({ kind: 'note' }).id)
   }
 
   /** Nouvelle conversation : en Code, dans le projet de code ouvert (sinon l'accueil Code). */
@@ -221,6 +262,7 @@ export default function App() {
       setMobileSidebarOpen(false)
     },
     onSelect: (id: string) => {
+      setNoteId(null)
       chat.selectConversation(id)
       setMobileSidebarOpen(false)
     },
@@ -237,6 +279,7 @@ export default function App() {
     projects: projects.projects,
     activeProjectId: chat.activeProjectId,
     onOpenProject: (id: string) => {
+      setNoteId(null)
       chat.newConversation(id)
       setMobileSidebarOpen(false)
     },
@@ -259,14 +302,9 @@ export default function App() {
     onSpaceChange: changeSpace,
     onAddCodeProject: () => void addCodeProject(),
     brainItems: brain.items,
-    onNewNote: () => {
-      setMobileSidebarOpen(false)
-      setBrainEditor({ id: null })
-    },
-    onOpenNote: (id: string) => {
-      setMobileSidebarOpen(false)
-      setBrainEditor({ id })
-    },
+    activeNoteId: openNote ? openNote.id : null,
+    onNewNote: newNote,
+    onOpenNote: showNote,
   }
 
   // /usage : petite carte au-dessus du champ (fermée en changeant de conversation).
@@ -335,14 +373,14 @@ export default function App() {
       <div className="flex h-dvh bg-background text-foreground">
         {/* Grand écran : barre latérale fixe, repliable (inert = ignorée au clavier quand elle est cachée) */}
         <aside ref={asideRef} inert={!sidebarOpen} className="hidden shrink-0 overflow-hidden md:block">
-          <div className="h-full w-64 border-r border-sidebar-border">
+          <div className="h-full w-72 border-r border-sidebar-border">
             <Sidebar {...sidebarProps} onCollapse={() => setSidebarOpen(false)} />
           </div>
         </aside>
 
         {/* Mobile : panneau qui glisse depuis la gauche */}
         <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
-          <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
+          <SheetContent side="left" showCloseButton={false} className="w-80 max-w-[85vw] gap-0 p-0">
             <SheetTitle className="sr-only">Conversations</SheetTitle>
             <Sidebar {...sidebarProps} />
           </SheetContent>
@@ -376,7 +414,10 @@ export default function App() {
             )}
             <span className="pointer-events-none min-w-0 truncate px-2 text-sm font-medium">
               {activeProject && active && <span className="text-muted-foreground">{activeProject.name} / </span>}
-              {active?.title ?? activeProject?.name ?? (space === 'code' ? 'Code' : space === 'brain' ? 'Cerveau' : 'Nouvelle conversation')}
+              {openNote && !active && <span className="text-muted-foreground">Cerveau / </span>}
+              {active?.title ??
+                activeProject?.name ??
+                (openNote ? itemTitle(openNote) : space === 'code' ? 'Code' : space === 'brain' ? 'Cerveau' : 'Nouvelle conversation')}
             </span>
             <div className="ml-auto flex items-center gap-1">
               <IconButton label="Réglages du modèle" onClick={() => openSettings('model')} className="relative">
@@ -427,15 +468,27 @@ export default function App() {
               onSelect={chat.selectConversation}
               onAddFile={(file) => addProjectFile(activeProject, file)}
             />
+          ) : isEmpty && space === 'brain' && openNote ? (
+            <BrainNotePage
+              key={openNote.id}
+              item={openNote}
+              brain={brain}
+              projects={projects.projects}
+              canOpenOrigin={chat.conversations.some((c) => c.id === openNote.origin?.conversationId)}
+              onBack={() => setNoteId(null)}
+              onOpenNote={showNote}
+              onOpenOrigin={() => openNote.origin && chat.selectConversation(openNote.origin.conversationId)}
+            />
           ) : isEmpty && space === 'brain' ? (
             <BrainHome
               brain={brain}
+              tidy={tidy}
               projects={projects.projects}
               conversations={chat.conversations}
               composer={composer}
               widthClass={widthClass}
-              onOpen={(id) => setBrainEditor({ id })}
-              onNew={() => setBrainEditor({ id: null })}
+              onOpen={showNote}
+              onNew={newNote}
               onSelectConversation={chat.selectConversation}
             />
           ) : isEmpty && space === 'code' ? (
@@ -505,21 +558,6 @@ export default function App() {
               chat.newConversation(created.id) // on ouvre le nouveau projet
             }
             setProjectDialog(null)
-          }}
-        />
-      )}
-
-      {brainEditor && (
-        <BrainEditor
-          key={brainEditor.id ?? 'new'}
-          id={brainEditor.id}
-          brain={brain}
-          projects={projects.projects}
-          conversations={chat.conversations}
-          onClose={() => setBrainEditor(null)}
-          onOpenConversation={(id) => {
-            setBrainEditor(null)
-            chat.selectConversation(id)
           }}
         />
       )}
@@ -669,46 +707,5 @@ function CodeHome({
         </Button>
       </Appear>
     </div>
-  )
-}
-
-/** Fenêtre d'un élément du cerveau, branchée sur l'état (création, enregistrement, suppression). */
-function BrainEditor({
-  id,
-  brain,
-  projects,
-  conversations,
-  onClose,
-  onOpenConversation,
-}: {
-  id: string | null
-  brain: ReturnType<typeof useBrain>
-  projects: Project[]
-  conversations: Conversation[]
-  onClose: () => void
-  onOpenConversation: (id: string) => void
-}) {
-  const item = id ? (brain.getItem(id) ?? null) : null
-  if (id && !item) return null // supprimé entre-temps
-  const originId = item?.origin?.conversationId
-  return (
-    <BrainItemDialog
-      item={item}
-      items={brain.items}
-      projects={projects}
-      canOpenOrigin={Boolean(originId && conversations.some((c) => c.id === originId))}
-      onClose={onClose}
-      onOpenOrigin={() => originId && onOpenConversation(originId)}
-      onDelete={() => {
-        if (item) brain.remove(item.id)
-        onClose()
-      }}
-      onSave={(draft) => {
-        const title = draft.title.trim() || firstLine(draft.content)
-        if (item) brain.update(item.id, { ...draft, title })
-        else brain.create({ kind: 'note', ...draft, title })
-        onClose()
-      }}
-    />
   )
 }

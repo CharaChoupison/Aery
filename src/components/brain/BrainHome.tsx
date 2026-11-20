@@ -1,7 +1,9 @@
-import { Brain, Plus, Search, Upload, X } from 'lucide-react'
+import { Brain, Folder, Plus, Search, Sparkles, Upload, X } from 'lucide-react'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
 import { BRAIN_KIND_ICONS } from '@/components/brain/kinds'
+import { BrainTidyPanel } from '@/components/brain/BrainTidyPanel'
+import type { BrainTidy } from '@/hooks/useBrainTidy'
 import { ProjectSources } from '@/components/ProjectSources'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { Button } from '@/components/ui/button'
@@ -10,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { Conversation } from '@/hooks/useChat'
 import type { Brain as BrainState } from '@/hooks/useBrain'
 import { AttachmentError, readAttachment, type Attachment } from '@/lib/attachments'
-import { allTags, BRAIN_KIND_LABELS, itemTitle, plainText, searchBrain, type BrainItem, type BrainKind } from '@/lib/brain'
+import { allFolders, allTags, BRAIN_KIND_LABELS, itemTitle, plainText, searchBrain, type BrainItem, type BrainKind } from '@/lib/brain'
 import { attachmentKey, normalizeUrl } from '@/lib/projectSources'
 import type { Project } from '@/lib/projects'
 import { cn } from '@/lib/utils'
@@ -31,6 +33,7 @@ const BRAIN_SOURCE_LABELS = {
  */
 export function BrainHome({
   brain,
+  tidy,
   projects,
   conversations,
   composer,
@@ -40,6 +43,7 @@ export function BrainHome({
   onSelectConversation,
 }: {
   brain: BrainState
+  tidy: BrainTidy
   projects: Project[]
   conversations: Conversation[]
   /** Zone de saisie : la question part dans une conversation du Chat, avec la recherche dans le cerveau. */
@@ -53,15 +57,18 @@ export function BrainHome({
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<BrainKind | null>(null)
   const [tag, setTag] = useState<string | null>(null)
+  const [folder, setFolder] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const tags = useMemo(() => allTags(items).slice(0, TOP_TAGS), [items])
+  const folders = useMemo(() => allFolders(items), [items])
   const filtered = useMemo(() => {
-    const base = items.filter((i) => (!kind || i.kind === kind) && (!tag || i.tags.includes(tag)))
+    const inFolder = (i: BrainItem) => !folder || i.folder === folder || Boolean(i.folder?.startsWith(`${folder}/`))
+    const base = items.filter((i) => (!kind || i.kind === kind) && (!tag || i.tags.includes(tag)) && inFolder(i))
     if (query.trim()) return searchBrain(base, query, 100)
     return [...base].sort((a, b) => b.updatedAt - a.updatedAt).map((item) => ({ item, snippet: '', score: 0 }))
-  }, [items, kind, tag, query])
+  }, [items, kind, tag, folder, query])
 
   const knownFiles = useMemo(() => new Set(items.flatMap((i) => (i.file ? [attachmentKey({ kind: 'text', ...i.file })] : []))), [items])
   const knownUrls = useMemo(() => new Set(items.flatMap((i) => (i.url ? [normalizeUrl(i.url)] : []))), [items])
@@ -104,6 +111,14 @@ export function BrainHome({
                 Mes notes <span className="text-xs text-muted-foreground tabular-nums">{items.length}</span>
               </TabsTrigger>
               <TabsTrigger value="captured">Capturé</TabsTrigger>
+              <TabsTrigger value="tidy">
+                Rangement
+                {tidy.running ? (
+                  <Sparkles className="size-3.5 animate-pulse text-muted-foreground" aria-label="Rangement en cours" />
+                ) : (
+                  tidy.pending > 0 && <span className="text-xs text-muted-foreground tabular-nums">{tidy.pending}</span>
+                )}
+              </TabsTrigger>
             </TabsList>
             <div className="flex gap-2">
               <input
@@ -175,6 +190,17 @@ export function BrainHome({
               ))}
             </div>
 
+            {folders.length > 0 && (
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Dossiers">
+                {folders.map((f) => (
+                  <Chip key={f} on={folder === f} onClick={() => setFolder(folder === f ? null : f)}>
+                    <Folder className="size-3.5" aria-hidden />
+                    {f.replace(/^\d+ - /, '').replace('/', ' / ')}
+                  </Chip>
+                ))}
+              </div>
+            )}
+
             {filtered.length === 0 ? (
               <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
                 {items.length === 0 ? 'Ton cerveau est vide pour l’instant.' : 'Rien ne correspond.'}
@@ -203,6 +229,10 @@ export function BrainHome({
               title="Dans tes conversations"
               emptyText="Rien pour l’instant : les fichiers joints et les pages web trouvées apparaîtront ici."
             />
+          </TabsContent>
+
+          <TabsContent value="tidy">
+            <BrainTidyPanel tidy={tidy} brain={brain} projects={projects} onOpen={onOpen} />
           </TabsContent>
         </Tabs>
       </Appear>
@@ -259,8 +289,14 @@ function ItemRow({
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">{dateFormat.format(item.updatedAt)}</span>
           </span>
           {preview && <span className="line-clamp-2 text-sm text-muted-foreground">{preview}</span>}
-          {(item.tags.length > 0 || linked.length > 0) && (
+          {(item.tags.length > 0 || linked.length > 0 || item.folder) && (
             <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              {item.folder && (
+                <span className="flex items-center gap-1">
+                  <Folder className="size-3" aria-hidden />
+                  {item.folder.replace(/^\d+ - /, '')}
+                </span>
+              )}
               {linked.map((p) => (
                 <span key={p.id} className="flex items-center gap-1">
                   <ProjectIcon project={p} className="size-3" />

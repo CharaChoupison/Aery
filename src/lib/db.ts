@@ -1,7 +1,8 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { Conversation } from '@/hooks/useChat'
 import type { Project } from '@/lib/projects'
-import type { BrainItem } from '@/lib/brain'
+import type { BrainItem, BrainVersion } from '@/lib/brain'
+import type { TidyRun } from '@/lib/brainTidy'
 import type { Attachment } from '@/lib/attachments'
 
 /**
@@ -14,6 +15,8 @@ const db = new Dexie('freellm-chat') as Dexie & {
   conversations: EntityTable<Conversation, 'id'>
   projects: EntityTable<Project, 'id'>
   brain: EntityTable<BrainItem, 'id'>
+  brainVersions: EntityTable<BrainVersion, 'id'>
+  tidyRuns: EntityTable<TidyRun, 'id'>
 }
 
 // Version 1 du schéma : clé primaire « id », index sur « updatedAt » pour trier.
@@ -62,6 +65,17 @@ db.version(3)
       delete p.files
     })
   })
+
+// Version 4 : rangement automatique du cerveau. « brainVersions » garde une copie de chaque élément
+// AVANT qu'il soit réécrit (rien n'est jamais perdu, on peut restaurer), « tidyRuns » le résumé de
+// chaque rangement. Les éléments existants ne changent pas : ils n'ont juste pas encore de dossier.
+db.version(4).stores({
+  conversations: 'id, updatedAt, projectId',
+  projects: 'id, updatedAt',
+  brain: 'id, updatedAt, kind, *projectIds, *tags',
+  brainVersions: 'id, itemId, runId, savedAt',
+  tidyRuns: 'id, at',
+})
 
 export async function loadConversations(): Promise<Conversation[]> {
   const all = await db.conversations.orderBy('updatedAt').reverse().toArray()
@@ -122,4 +136,30 @@ export function saveBrainItems(items: BrainItem[]): Promise<string> {
 
 export function deleteBrainItemFromDb(id: string): Promise<void> {
   return db.brain.delete(id)
+}
+
+// --- Historique des éléments et rangements ---------------------------------------------
+
+/** Garde une copie des éléments avant de les modifier (rangement, restauration). */
+export function saveBrainVersions(versions: BrainVersion[]): Promise<string> {
+  return db.brainVersions.bulkPut(versions)
+}
+
+/** Versions d'un élément, de la plus récente à la plus ancienne. */
+export async function loadBrainVersions(itemId: string): Promise<BrainVersion[]> {
+  const all = await db.brainVersions.where('itemId').equals(itemId).sortBy('savedAt')
+  return all.reverse()
+}
+
+export function loadRunVersions(runId: string): Promise<BrainVersion[]> {
+  return db.brainVersions.where('runId').equals(runId).toArray()
+}
+
+/** Rangements, du plus récent au plus ancien. */
+export function loadTidyRuns(limit = 30): Promise<TidyRun[]> {
+  return db.tidyRuns.orderBy('at').reverse().limit(limit).toArray()
+}
+
+export function saveTidyRun(run: TidyRun): Promise<string> {
+  return db.tidyRuns.put(run)
 }

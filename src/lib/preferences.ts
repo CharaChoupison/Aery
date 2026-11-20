@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { sanitizeCustomCommands, type CustomCommand } from '@/lib/commands'
+import { DEFAULT_TIDY_SCHEDULE, type TidySchedule } from '@/lib/brainTidy'
 
 /**
  * Préférences de l'interface (thème, animations, réglages du modèle…).
@@ -63,6 +64,8 @@ export interface Preferences {
   brain: boolean
   /** Commandes slash créées par l'utilisateur (Paramètres › Commandes). */
   commands: CustomCommand[]
+  /** Rangement automatique du second cerveau (jour, heure, activé). */
+  brainTidy: TidySchedule
 }
 
 /** Bornes des réglages : les mêmes que le Playground de FreeLLMAPI. */
@@ -101,6 +104,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   webSearch: true,
   brain: true,
   commands: [],
+  brainTidy: DEFAULT_TIDY_SCHEDULE,
 }
 
 const STORAGE_KEY = 'freellm-chat:preferences'
@@ -167,13 +171,30 @@ function sanitize(raw: unknown): Preferences {
     webSearch: typeof r.webSearch === 'boolean' ? r.webSearch : d.webSearch,
     brain: typeof r.brain === 'boolean' ? r.brain : d.brain,
     commands: sanitizeCustomCommands(r.commands),
+    brainTidy: readTidy(r.brainTidy),
+  }
+}
+
+function readTidy(raw: unknown): TidySchedule {
+  const d = DEFAULT_TIDY_SCHEDULE
+  const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : d.enabled,
+    day: Math.round(clamp(r.day, 0, 6, d.day)),
+    hour: Math.round(clamp(r.hour, 0, 23, d.hour)),
+    // Première lecture : « depuis maintenant », pour ne pas ranger d'un coup à l'installation.
+    since: typeof r.since === 'number' && Number.isFinite(r.since) ? r.since : Date.now(),
   }
 }
 
 function load(): Preferences {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? sanitize(JSON.parse(raw)) : DEFAULT_PREFERENCES
+    const prefs = sanitize(raw ? JSON.parse(raw) : {})
+    // Le « depuis » du rangement doit être retenu dès la première fois, sinon il serait
+    // repoussé à chaque lancement et le rangement n'aurait jamais lieu.
+    if (!raw?.includes('"since"')) localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs))
+    return prefs
   } catch {
     return DEFAULT_PREFERENCES // localStorage indisponible ou JSON abîmé
   }

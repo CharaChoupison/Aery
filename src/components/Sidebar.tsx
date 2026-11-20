@@ -91,6 +91,8 @@ interface Props {
   onAddCodeProject: () => void
   /** Espace Cerveau : les éléments récents, et de quoi en ouvrir / créer. */
   brainItems: BrainItem[]
+  /** Note ouverte en pleine page (surlignée dans « Récents »). */
+  activeNoteId: string | null
   onNewNote: () => void
   onOpenNote: (id: string) => void
 }
@@ -217,7 +219,11 @@ export function Sidebar(props: Props) {
                       <button
                         type="button"
                         onClick={() => props.onOpenNote(item.id)}
-                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+                        aria-current={item.id === props.activeNoteId ? 'page' : undefined}
+                        className={cn(
+                          'flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50',
+                          item.id === props.activeNoteId && 'bg-sidebar-accent',
+                        )}
                       >
                         <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                         <span className="truncate">{itemTitle(item)}</span>

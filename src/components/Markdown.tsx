@@ -1,5 +1,5 @@
-import { Globe, ImageOff } from 'lucide-react'
-import { isValidElement, memo, type ReactNode } from 'react'
+import { FileText, Globe, ImageOff } from 'lucide-react'
+import { createContext, isValidElement, memo, useContext, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
@@ -12,12 +12,34 @@ import { CodeBlock } from '@/components/CodeBlock'
  *  - Les images ne sont PAS chargées : une URL d'image peut servir à faire fuiter des
  *    données vers un serveur tiers (prompt injection). On affiche un lien à la place.
  */
+/**
+ * Liens entre notes du cerveau : [[Titre]] est transformé en lien « #note:<id> » (linkifyWikilinks)
+ * avant le rendu. Ce contexte dit quoi faire au clic (ouvrir la note). Sans lui : simple texte.
+ */
+export const NoteLinkContext = createContext<((id: string) => void) | null>(null)
+
+function NoteLink({ id, children }: { id: string; children: ReactNode }) {
+  const open = useContext(NoteLinkContext)
+  if (!open) return <span>{children}</span>
+  return (
+    <button
+      type="button"
+      onClick={() => open(id)}
+      className="not-prose inline-flex translate-y-[-1px] items-center gap-1 rounded-md bg-muted px-1.5 py-px align-middle text-[0.9em] font-medium text-foreground transition-colors hover:bg-accent"
+    >
+      <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      {children}
+    </button>
+  )
+}
+
 const components: Components = {
   pre: CodeBlock,
 
   a: ({ node: _node, href, children, ...props }) => {
     // Lien vidé par defaultUrlTransform (ex. javascript:) → simple texte.
     if (!href) return <span>{children}</span>
+    if (href.startsWith('#note:')) return <NoteLink id={href.slice(6)}>{children}</NoteLink>
     const site = citationSite(href, textOf(children))
     if (site) {
       // Citation de source → pastille discrète avec le nom du site, l'URL complète au survol.

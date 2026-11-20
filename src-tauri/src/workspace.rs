@@ -74,7 +74,7 @@ fn save_granted(app: &AppHandle, set: &BTreeSet<PathBuf>) -> Result<(), String> 
 }
 
 /// Refuse les dossiers beaucoup trop larges (tout le disque, tout le dossier personnel).
-fn is_too_broad(path: &Path) -> bool {
+pub(crate) fn is_too_broad(path: &Path) -> bool {
     let home = std::env::var_os("HOME").map(PathBuf::from).and_then(|h| h.canonicalize().ok());
     path.parent().is_none() || home.is_some_and(|h| h == path || h.starts_with(path))
 }
