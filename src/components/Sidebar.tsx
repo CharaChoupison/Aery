@@ -1,8 +1,15 @@
 import {
+  ChevronRight,
   CircleArrowUp,
   CircleAlert,
+  Folder,
+  FolderInput,
+  FolderMinus,
+  FolderOpen,
+  FolderPlus,
   LoaderCircle,
   MoreHorizontal,
+  Plus,
   PanelLeftClose,
   Pencil,
   Settings,
@@ -22,11 +29,21 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { IconButton } from '@/components/IconButton'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import type { Conversation } from '@/hooks/useChat'
+import type { Project } from '@/lib/projects'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { useUpdates } from '@/lib/updates'
 import { Appear } from '@/components/Appear'
@@ -52,6 +69,14 @@ interface Props {
   trafficLights?: boolean
   /** Flèches Précédent / Suivant. */
   nav?: NavControls
+  projects: Project[]
+  /** Projet ouvert (celui de la conversation, ou l'accueil d'un projet). */
+  activeProjectId: string | null
+  onOpenProject: (id: string) => void
+  onNewProject: () => void
+  onEditProject: (id: string) => void
+  onDeleteProject: (id: string) => void
+  onMove: (conversationId: string, projectId: string | null) => void
 }
 
 // --- Regroupement par date, comme ChatGPT -------------------------------------------
@@ -82,7 +107,25 @@ function groupByDate(conversations: Conversation[]): { label: string; items: Con
 // --- La barre latérale ---------------------------------------------------------------
 
 export function Sidebar(props: Props) {
-  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, trafficLights, nav } = props
+  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, trafficLights, nav, projects, activeProjectId } = props
+  const [pendingProjectDelete, setPendingProjectDelete] = useState<Project | null>(null)
+  // Projets dépliés. Celui qu'on ouvre se déplie tout seul (synchronisé pendant le rendu, pas dans un effet).
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(activeProjectId ? [activeProjectId] : []))
+  const [lastActiveProject, setLastActiveProject] = useState(activeProjectId)
+  if (activeProjectId !== lastActiveProject) {
+    setLastActiveProject(activeProjectId)
+    if (activeProjectId && !expanded.has(activeProjectId)) setExpanded(new Set([...expanded, activeProjectId]))
+  }
+  const toggleProject = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  // Conversations hors projet (ou dont le projet n'existe plus) : la liste par date habituelle.
+  const projectIds = new Set(projects.map((p) => p.id))
+  const loose = conversations.filter((c) => !c.projectId || !projectIds.has(c.projectId))
   const updates = useUpdates()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const motion = useMotion()
@@ -139,12 +182,62 @@ export function Sidebar(props: Props) {
             {storageError}
           </p>
         )}
+        {/* Projets : des dossiers de conversations qui partagent instructions, fichiers et mémoire. */}
+        <section className="mb-4" aria-label="Projets">
+          <div className="flex items-center justify-between pr-0.5 pl-2">
+            <h3 className="text-xs font-medium text-muted-foreground">Projets</h3>
+            <IconButton label="Nouveau projet" size="icon-sm" onClick={props.onNewProject} className="text-muted-foreground">
+              <Plus className="size-3.5" aria-hidden />
+            </IconButton>
+          </div>
+          {projects.length === 0 ? (
+            <Button variant="ghost" className="h-8 w-full justify-start gap-2 px-2 text-sm font-normal text-muted-foreground" onClick={props.onNewProject}>
+              <FolderPlus className="size-4" aria-hidden />
+              Nouveau projet
+            </Button>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {projects.map((p) => {
+                const items = conversations.filter((c) => c.projectId === p.id)
+                const open = expanded.has(p.id)
+                return (
+                  <li key={p.id}>
+                    <ProjectItem
+                      project={p}
+                      open={open}
+                      count={items.length}
+                      active={activeProjectId === p.id && (props.activeId === null || !items.some((c) => c.id === props.activeId))}
+                      onToggle={() => toggleProject(p.id)}
+                      onOpen={() => props.onOpenProject(p.id)}
+                      onEdit={() => props.onEditProject(p.id)}
+                      onAskDelete={() => setPendingProjectDelete(p)}
+                    />
+                    {open && items.length > 0 && (
+                      <ul className="mt-0.5 ml-4 flex flex-col gap-0.5 border-l border-sidebar-border pl-1.5">
+                        {items.map((c) => (
+                          <ConversationItem
+                            key={c.id}
+                            conversation={c}
+                            {...props}
+                            onAskDelete={setPendingDelete}
+                            animateIn={c.createdAt > mountedAt}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
+
         {!loaded ? (
           <LoaderCircle className="mx-2 size-4 animate-spin text-muted-foreground" aria-label="Chargement de l’historique" />
-        ) : conversations.length === 0 ? (
-          <p className="px-2 text-sm text-muted-foreground">Aucune conversation pour l’instant.</p>
+        ) : loose.length === 0 ? (
+          conversations.length === 0 && <p className="px-2 text-sm text-muted-foreground">Aucune conversation pour l’instant.</p>
         ) : (
-          groupByDate(conversations).map((group) => (
+          groupByDate(loose).map((group) => (
             <section key={group.label} className="mb-4">
               <h3 className="px-2 pb-1 text-xs font-medium text-muted-foreground">{group.label}</h3>
               <ul className="flex flex-col gap-0.5">
@@ -185,6 +278,30 @@ export function Sidebar(props: Props) {
         <ThemeToggle />
       </div>
 
+      <AlertDialog open={pendingProjectDelete !== null} onOpenChange={(open) => !open && setPendingProjectDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer le projet ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              « {pendingProjectDelete?.name} », ses instructions et ses fichiers seront supprimés. Ses conversations sont gardées :
+              elles reviennent dans la liste principale.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingProjectDelete) props.onDeleteProject(pendingProjectDelete.id)
+                setPendingProjectDelete(null)
+              }}
+            >
+              Supprimer le projet
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Confirmation avant suppression (c'est définitif) */}
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <AlertDialogContent>
@@ -222,6 +339,8 @@ function ConversationItem({
   onRename,
   onAskDelete,
   animateIn,
+  projects,
+  onMove,
 }: Props & { conversation: Conversation; onAskDelete: (c: Conversation) => void; animateIn: boolean }) {
   const [renaming, setRenaming] = useState(false)
   const itemRef = useRef<HTMLLIElement>(null)
@@ -306,7 +425,7 @@ function ConversationItem({
           <MoreHorizontal className="size-4" aria-hidden />
         </DropdownMenuTrigger>
         {/* finalFocus : en mode renommage, on ne rend pas le focus au bouton (sinon le champ le perdrait). */}
-        <DropdownMenuContent align="start" className="w-40" finalFocus={!renaming}>
+        <DropdownMenuContent align="start" className="w-44" finalFocus={!renaming}>
           <DropdownMenuItem
             onClick={() => {
               setDraft(c.title)
@@ -316,6 +435,33 @@ function ConversationItem({
             <Pencil aria-hidden />
             Renommer
           </DropdownMenuItem>
+          {(projects.length > 0 || c.projectId) && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <FolderInput aria-hidden />
+                Déplacer vers
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-48">
+                {projects
+                  .filter((p) => p.id !== c.projectId)
+                  .map((p) => (
+                    <DropdownMenuItem key={p.id} onClick={() => onMove(c.id, p.id)}>
+                      <Folder aria-hidden />
+                      <span className="truncate">{p.name}</span>
+                    </DropdownMenuItem>
+                  ))}
+                {c.projectId && (
+                  <>
+                    {projects.length > 1 && <DropdownMenuSeparator />}
+                    <DropdownMenuItem onClick={() => onMove(c.id, null)}>
+                      <FolderMinus aria-hidden />
+                      Retirer du projet
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           <DropdownMenuItem variant="destructive" onClick={() => onAskDelete(c)}>
             <Trash2 aria-hidden />
             Supprimer
@@ -323,5 +469,81 @@ function ConversationItem({
         </DropdownMenuContent>
       </DropdownMenu>
     </li>
+  )
+}
+
+// --- Un projet dans la liste -----------------------------------------------------------
+
+function ProjectItem({
+  project,
+  open,
+  count,
+  active,
+  onToggle,
+  onOpen,
+  onEdit,
+  onAskDelete,
+}: {
+  project: Project
+  open: boolean
+  count: number
+  active: boolean
+  onToggle: () => void
+  onOpen: () => void
+  onEdit: () => void
+  onAskDelete: () => void
+}) {
+  const Icon = open ? FolderOpen : Folder
+  return (
+    <div className={cn('group/item flex items-center rounded-lg transition-colors hover:bg-sidebar-accent', active && 'bg-sidebar-accent')}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={`${open ? 'Replier' : 'Déplier'} « ${project.name} » (${count} conversation${count > 1 ? 's' : ''})`}
+        title={open ? 'Replier' : 'Déplier'}
+        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
+      >
+        <ChevronRight className={cn('size-3.5 transition-transform duration-200', open && 'rotate-90')} aria-hidden />
+      </button>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-current={active ? 'page' : undefined}
+        title={project.name}
+        className={cn('flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left text-sm', active && 'font-medium')}
+      >
+        <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="truncate">{project.name}</span>
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Options du projet « ${project.name} »`}
+              className="mr-0.5 shrink-0 text-muted-foreground opacity-0 group-hover/item:opacity-100 hover:bg-transparent hover:text-foreground focus-visible:opacity-100 data-[popup-open]:opacity-100 [@media(hover:none)]:opacity-100"
+            />
+          }
+        >
+          <MoreHorizontal className="size-4" aria-hidden />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuItem onClick={onOpen}>
+            <SquarePen aria-hidden />
+            Nouvelle conversation
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onEdit}>
+            <Pencil aria-hidden />
+            Modifier le projet
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onClick={onAskDelete}>
+            <Trash2 aria-hidden />
+            Supprimer
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   )
 }

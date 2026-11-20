@@ -3,6 +3,8 @@ import { ApiError, chatCompletion, isAbortError, isRouterModel, sendsImages, str
 import { textWithFiles, type Attachment } from '@/lib/attachments'
 import { deleteConversationFromDb, loadConversations, saveConversation } from '@/lib/db'
 import { buildSystemPrompt, getPreferences, samplingParams } from '@/lib/preferences'
+import { buildProjectPrompt, PROJECT_LIMITS, SUMMARY_EVERY, SUMMARY_PROMPT, type ConversationSummary, type Project } from '@/lib/projects'
+import { splitThinking } from '@/lib/thinking'
 
 /** Message affiché : un ChatMessage + des infos propres à l'interface. */
 export interface UiMessage extends ChatMessage {
@@ -20,6 +22,10 @@ export interface Conversation {
   titleSource: 'provisional' | 'auto' | 'user'
   /** Modèle choisi pour cette conversation (absent = modèle par défaut). */
   model?: string
+  /** Projet auquel elle appartient (absent = hors projet). */
+  projectId?: string
+  /** Résumé pour la mémoire du projet. */
+  summary?: ConversationSummary
   messages: UiMessage[]
   createdAt: number
   updatedAt: number
@@ -90,6 +96,26 @@ interface Options {
   onMissingKey?: () => void
   /** true / false si on sait si ce modèle lit les images, null si on ne sait pas. */
   isVisionModel?: (modelId: string) => boolean | null
+  /** Pour retrouver le projet d'une conversation (instructions, fichiers, mémoire). */
+  getProject?: (id: string) => Project | undefined
+}
+
+function withoutProject(c: Conversation): Conversation {
+  const next = { ...c }
+  delete next.projectId
+  return next
+}
+
+/** Le message système complet : profil + instructions, puis le contexte du projet s'il y en a un. */
+function systemPromptFor(convId: string, all: Conversation[], project: Project | undefined): string {
+  const base = buildSystemPrompt(getPreferences())
+  if (!project) return base
+  const others = all
+    .filter((c) => c.projectId === project.id && c.id !== convId && c.summary)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, PROJECT_LIMITS.summaries)
+    .map((c) => ({ title: c.title, summary: c.summary!.text }))
+  return [base, buildProjectPrompt(project, others)].filter(Boolean).join('\n\n')
 }
 
 /** Texte qui résume un message pour un titre : son contenu, sinon le nom des fichiers joints. */
@@ -121,10 +147,15 @@ export function useChat(options: Options = {}) {
   // On garde la dernière version du callback dans une ref (mise à jour après chaque rendu).
   const onMissingKeyRef = useRef(options.onMissingKey)
   const isVisionRef = useRef(options.isVisionModel)
+  const getProjectRef = useRef(options.getProject)
   useEffect(() => {
     onMissingKeyRef.current = options.onMissingKey
     isVisionRef.current = options.isVisionModel
+    getProjectRef.current = options.getProject
   })
+  // Projet de la prochaine conversation (accueil d'un projet ouvert, avant le premier message).
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null)
+  const summaryPendingRef = useRef(new Set<string>())
 
   // --- Chargement au démarrage ----------------------------------------------------
   useEffect(() => {
@@ -200,9 +231,43 @@ export function useChat(options: Options = {}) {
     [updateConversation],
   )
 
+  /**
+   * Mémoire du projet : demande au modèle un court résumé de la conversation.
+   * En cas d'échec, pas grave : on réessaiera après une prochaine réponse.
+   */
+  const generateSummary = useCallback(
+    async (convId: string, messages: ChatMessage[]) => {
+      if (summaryPendingRef.current.has(convId)) return
+      summaryPendingRef.current.add(convId)
+      try {
+        const transcript = messages
+          .map((m) => {
+            const text = m.role === 'assistant' ? splitThinking(m.content).answer : m.content
+            const files = (m.attachments ?? []).map((a) => `[${a.kind === 'image' ? 'image' : 'fichier'} : ${a.name}]`).join(' ')
+            return `${m.role === 'user' ? 'Utilisateur' : 'Assistant'} : ${text.slice(0, 2000)} ${files}`.trim()
+          })
+          .join('\n\n')
+          .slice(-12_000)
+        const { content } = await chatCompletion([
+          { role: 'system', content: SUMMARY_PROMPT },
+          { role: 'user', content: transcript },
+        ])
+        const text = splitThinking(content).answer.replace(/\s+/g, ' ').trim().slice(0, 700)
+        if (text) updateConversation(convId, (c) => ({ ...c, summary: { text, messageCount: messages.length } }))
+      } catch {
+        // on garde l'ancien résumé
+      } finally {
+        summaryPendingRef.current.delete(convId)
+      }
+    },
+    [updateConversation],
+  )
+
   /** Lance une réponse en streaming dans la conversation `convId`, à partir de `history`. */
   const runStream = useCallback(
-    async (convId: string, history: UiMessage[], model: string) => {
+    // projectId est passé par l'appelant : pour une conversation toute neuve, elle n'est pas encore
+    // dans conversationsRef (mis à jour après le prochain rendu).
+    async (convId: string, history: UiMessage[], model: string, projectId: string | undefined) => {
       const controller = new AbortController()
       abortRef.current = controller
       setStreamingId(convId)
@@ -237,10 +302,12 @@ export function useChat(options: Options = {}) {
       let received = ''
       let reasoning = ''
       try {
+        const conv = conversationsRef.current.find((c) => c.id === convId)
+        const project = projectId ? getProjectRef.current?.(projectId) : undefined
         const stream = streamChat(history, {
           model,
           signal: controller.signal,
-          systemPrompt: buildSystemPrompt(prefs),
+          systemPrompt: systemPromptFor(convId, conversationsRef.current, project),
           sampling: samplingParams(prefs),
           historyLimit: prefs.historyLimit,
         })
@@ -263,10 +330,14 @@ export function useChat(options: Options = {}) {
               : 'Le modèle a renvoyé une réponse vide. Réessaie.',
           )
         }
+        // Mémoire du projet : un résumé à la 1re réponse, puis tous les SUMMARY_EVERY messages.
+        const done: ChatMessage[] = [...history, { role: 'assistant', content: received }]
+        if (project?.memory && (!conv?.summary || done.length - conv.summary.messageCount >= SUMMARY_EVERY)) {
+          void generateSummary(convId, done)
+        }
         // Réponse réussie et titre encore provisoire : on demande un vrai titre (en parallèle, sans bloquer).
-        const conv = conversationsRef.current.find((c) => c.id === convId)
         const firstUser = history.find((m) => m.role === 'user')
-        if (conv?.titleSource === 'provisional' && firstUser && getPreferences().autoTitle) {
+        if ((conv?.titleSource ?? 'provisional') === 'provisional' && firstUser && getPreferences().autoTitle) {
           // Le titre se base sur le texte (et le début des fichiers texte), pas sur les images.
           void generateTitle(convId, textWithFiles(firstUser.content, firstUser.attachments) || summaryText(firstUser))
         }
@@ -290,7 +361,7 @@ export function useChat(options: Options = {}) {
         setStreamingId(null)
       }
     },
-    [generateTitle, setError, updateConversation],
+    [generateSummary, generateTitle, setError, updateConversation],
   )
 
   const send = useCallback(
@@ -307,7 +378,7 @@ export function useChat(options: Options = {}) {
       const existing = conversations.find((c) => c.id === activeId)
 
       if (existing) {
-        void runStream(existing.id, [...existing.messages, userMessage], existing.model ?? defaultModel)
+        void runStream(existing.id, [...existing.messages, userMessage], existing.model ?? defaultModel, existing.projectId)
         return
       }
 
@@ -318,15 +389,16 @@ export function useChat(options: Options = {}) {
         title: provisionalTitle(summaryText(userMessage)),
         titleSource: 'provisional',
         model: defaultModel,
+        ...(pendingProjectId && { projectId: pendingProjectId }),
         messages: [],
         createdAt: now,
         updatedAt: now,
       }
       setConversations((prev) => [conv, ...prev])
       setActiveId(conv.id)
-      void runStream(conv.id, [userMessage], defaultModel)
+      void runStream(conv.id, [userMessage], defaultModel, conv.projectId)
     },
-    [activeId, conversations, defaultModel, runStream, streamingId],
+    [activeId, conversations, defaultModel, pendingProjectId, runStream, streamingId],
   )
 
   const stop = useCallback(() => abortRef.current?.abort(), [])
@@ -335,7 +407,7 @@ export function useChat(options: Options = {}) {
     if (!activeId || streamingId) return
     const error = errors[activeId]
     const conv = conversations.find((c) => c.id === activeId)
-    if (error) void runStream(activeId, error.retryHistory, conv?.model ?? defaultModel)
+    if (error) void runStream(activeId, error.retryHistory, conv?.model ?? defaultModel, conv?.projectId)
   }, [activeId, conversations, defaultModel, errors, runStream, streamingId])
 
   /** Choisir un modèle : il s'applique à la conversation ouverte ET devient le défaut des nouvelles. */
@@ -348,8 +420,41 @@ export function useChat(options: Options = {}) {
     [activeId, updateConversation],
   )
 
-  const newConversation = useCallback(() => setActiveId(null), [])
-  const selectConversation = useCallback((id: string) => setActiveId(id), [])
+  /** Nouvelle conversation, éventuellement dans un projet (accueil du projet). */
+  const newConversation = useCallback((projectId: string | null = null) => {
+    setActiveId(null)
+    setPendingProjectId(projectId)
+  }, [])
+  const selectConversation = useCallback((id: string) => {
+    setActiveId(id)
+    setPendingProjectId(null)
+  }, [])
+
+  /** Range une conversation dans un projet (null = la sortir du projet). */
+  const moveConversation = useCallback(
+    (id: string, projectId: string | null) =>
+      updateConversation(id, (c) => (projectId ? { ...c, projectId } : withoutProject(c))),
+    [updateConversation],
+  )
+
+  /** Retire le résumé d'une conversation de la mémoire du projet (il sera refait plus tard). */
+  const forgetSummary = useCallback(
+    (id: string) =>
+      updateConversation(id, (c) => {
+        const next = { ...c }
+        delete next.summary
+        return next
+      }),
+    [updateConversation],
+  )
+
+  /** Projet supprimé : ses conversations repassent hors projet (la base, elle, est déjà à jour). */
+  const detachProject = useCallback((projectId: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.projectId === projectId ? withoutProject(c) : c)),
+    )
+    setPendingProjectId((p) => (p === projectId ? null : p))
+  }, [])
 
   const renameConversation = useCallback(
     (id: string, title: string) => {
@@ -384,12 +489,17 @@ export function useChat(options: Options = {}) {
     streamingId,
     isStreaming: streamingId !== null,
     selectedModel: active?.model ?? defaultModel,
+    /** Projet ouvert : celui de la conversation, ou celui de l'accueil de projet. */
+    activeProjectId: active ? (active.projectId ?? null) : pendingProjectId,
     setModel,
     send,
     stop,
     retry,
     newConversation,
     selectConversation,
+    moveConversation,
+    detachProject,
+    forgetSummary,
     renameConversation,
     deleteConversation,
   }

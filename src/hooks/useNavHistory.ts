@@ -4,14 +4,16 @@ import type { View } from '@/App'
 /** Un « endroit » de l'appli : une page, et la conversation ouverte si c'est le chat. */
 export interface Place {
   view: View
-  /** null = nouvelle conversation vide (ou page de stats). */
+  /** null = nouvelle conversation vide. */
   conversationId: string | null
+  /** Accueil d'un projet (seulement quand aucune conversation n'est ouverte). */
+  projectId?: string | null
 }
 
 const MAX_ENTRIES = 50
 
 function samePlace(a: Place, b: Place) {
-  return a.view === b.view && a.conversationId === b.conversationId
+  return a.view === b.view && a.conversationId === b.conversationId && (a.projectId ?? null) === (b.projectId ?? null)
 }
 
 /**
@@ -43,7 +45,7 @@ export function useNavHistory(current: Place, go: (place: Place) => void, exists
       const next = [...entries.slice(0, index + 1), current].slice(-MAX_ENTRIES)
       return { entries: next, index: next.length - 1 }
     })
-  }, [current.view, current.conversationId])
+  }, [current.view, current.conversationId, current.projectId])
 
   /** Index du prochain endroit encore valide dans une direction (une conversation supprimée est sautée). */
   const target = useCallback(

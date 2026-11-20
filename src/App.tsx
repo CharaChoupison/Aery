@@ -1,6 +1,6 @@
-import { PanelLeft, SlidersHorizontal, SquarePen } from 'lucide-react'
+import { Brain, FolderOpen, PanelLeft, Pencil, SlidersHorizontal, SquarePen } from 'lucide-react'
 import { AeryLogo } from '@/components/AeryLogo'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
 import { Composer } from '@/components/Composer'
 import { IconButton } from '@/components/IconButton'
@@ -10,9 +10,13 @@ import { SettingsDialog, type SettingsTab } from '@/components/SettingsDialog'
 import { Sidebar } from '@/components/Sidebar'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { useChat } from '@/hooks/useChat'
+import { useChat, type Conversation } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
 import { useVisionModels } from '@/hooks/useVisionModels'
+import { useProjects } from '@/hooks/useProjects'
+import type { Project } from '@/lib/projects'
+import { ProjectDialog } from '@/components/ProjectDialog'
+import { Button } from '@/components/ui/button'
 import { useNavHistory, type Place } from '@/hooks/useNavHistory'
 import { NavArrows, useNavShortcuts } from '@/components/NavArrows'
 import { ApiError, getSettings, type Settings } from '@/lib/api'
@@ -50,7 +54,11 @@ export default function App() {
   // Incrémenté quand des modèles sont activés / désactivés ou des clés ajoutées (Paramètres).
   const [modelsVersion, setModelsVersion] = useState(0)
   const isVisionModel = useVisionModels(settings?.hasKey ?? false, modelsVersion)
-  const chat = useChat({ onMissingKey: () => openSettings('connection'), isVisionModel })
+  const projects = useProjects()
+  const chat = useChat({ onMissingKey: () => openSettings('connection'), isVisionModel, getProject: projects.getProject })
+  // Fenêtre du projet : null = fermée ; { id: null } = création ; { id } = modification.
+  const [projectDialog, setProjectDialog] = useState<{ id: string | null } | null>(null)
+  const activeProject = chat.activeProjectId ? projects.getProject(chat.activeProjectId) : undefined
   const models = useModels(settings?.hasKey ?? false)
   const { active, activeError, isStreaming, streamingId } = chat
   const activeIsStreaming = active !== null && streamingId === active.id
@@ -60,16 +68,18 @@ export default function App() {
   const goTo = useCallback(
     (place: Place) => {
       if (place.conversationId) selectConversation(place.conversationId)
-      else resetConversation()
+      else resetConversation(place.projectId ?? null)
     },
     [selectConversation, resetConversation],
   )
   const placeExists = useCallback(
-    (place: Place) => !place.conversationId || conversations.some((c) => c.id === place.conversationId),
-    [conversations],
+    (place: Place) =>
+      (!place.conversationId || conversations.some((c) => c.id === place.conversationId)) &&
+      (!place.projectId || projects.getProject(place.projectId) !== undefined),
+    [conversations, projects],
   )
   const nav = useNavHistory(
-    { view: 'chat', conversationId: active?.id ?? null },
+    { view: 'chat', conversationId: active?.id ?? null, projectId: active ? null : chat.activeProjectId },
     goTo,
     placeExists,
   )
@@ -112,6 +122,25 @@ export default function App() {
     },
     trafficLights,
     nav,
+    projects: projects.projects,
+    activeProjectId: chat.activeProjectId,
+    onOpenProject: (id: string) => {
+      chat.newConversation(id)
+      setMobileSidebarOpen(false)
+    },
+    onNewProject: () => {
+      setMobileSidebarOpen(false)
+      setProjectDialog({ id: null })
+    },
+    onEditProject: (id: string) => {
+      setMobileSidebarOpen(false)
+      setProjectDialog({ id })
+    },
+    onDeleteProject: (id: string) => {
+      void projects.deleteProject(id)
+      chat.detachProject(id)
+    },
+    onMove: chat.moveConversation,
   }
 
   const composer = (
@@ -188,7 +217,8 @@ export default function App() {
               </Appear>
             )}
             <span className="pointer-events-none min-w-0 truncate px-2 text-sm font-medium">
-              {active?.title ?? 'Nouvelle conversation'}
+              {activeProject && active && <span className="text-muted-foreground">{activeProject.name} / </span>}
+              {active?.title ?? activeProject?.name ?? 'Nouvelle conversation'}
             </span>
             <div className="ml-auto flex items-center gap-1">
               <IconButton label="Réglages du modèle" onClick={() => openSettings('model')} className="relative">
@@ -221,7 +251,18 @@ export default function App() {
             </p>
           )}
 
-          {isEmpty ? (
+          {isEmpty && activeProject ? (
+            // Accueil d'un projet : son nom, ses conversations, et une zone de saisie pour en commencer une.
+            <ProjectHome
+              key={activeProject.id}
+              project={activeProject}
+              conversations={chat.conversations.filter((c) => c.projectId === activeProject.id)}
+              composer={composer}
+              widthClass={widthClass}
+              onEdit={() => setProjectDialog({ id: activeProject.id })}
+              onSelect={chat.selectConversation}
+            />
+          ) : isEmpty ? (
             // Conversation vide : titre et zone de saisie au centre, comme ChatGPT.
             // key : l'animation d'accueil se rejoue à chaque nouvelle conversation.
             <Appear
@@ -258,6 +299,20 @@ export default function App() {
         </div>
       </div>
 
+      {projectDialog && (
+        <ProjectDialog
+          project={projectDialog.id ? (projects.getProject(projectDialog.id) ?? null) : null}
+          conversations={chat.conversations}
+          onClose={() => setProjectDialog(null)}
+          onForgetSummary={chat.forgetSummary}
+          onSave={(draft) => {
+            if (projectDialog.id) projects.updateProject(projectDialog.id, draft)
+            else chat.newConversation(projects.createProject(draft).id) // on ouvre le nouveau projet
+            setProjectDialog(null)
+          }}
+        />
+      )}
+
       <SettingsDialog
         open={settingsOpen}
         tab={settingsTab}
@@ -275,5 +330,66 @@ export default function App() {
         }}
       />
     </TooltipProvider>
+  )
+}
+
+/** Accueil d'un projet : nom, instructions, conversations du projet, et la zone de saisie. */
+function ProjectHome({
+  project,
+  conversations,
+  composer,
+  widthClass,
+  onEdit,
+  onSelect,
+}: {
+  project: Project
+  conversations: Conversation[]
+  composer: ReactNode
+  widthClass: string
+  onEdit: () => void
+  onSelect: (id: string) => void
+}) {
+  const details = [
+    project.instructions.trim() && 'instructions',
+    project.files.length > 0 && `${project.files.length} fichier${project.files.length > 1 ? 's' : ''}`,
+    project.memory && 'mémoire activée',
+  ].filter(Boolean)
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <Appear stagger={0.08} from={{ autoAlpha: 0, y: 20, duration: 0.5 }} className={cn('mx-auto flex w-full flex-col gap-6 px-4 pt-[12vh] pb-8', widthClass)}>
+        <div className="flex items-center gap-3">
+          <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-muted">
+            <FolderOpen className="size-6" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-2xl font-semibold">{project.name}</h2>
+            <p className="text-sm text-muted-foreground">{details.length ? details.join(' · ') : 'Ajoute des instructions pour donner du contexte au modèle.'}</p>
+          </div>
+          <Button variant="outline" className="h-9" onClick={onEdit}>
+            <Pencil aria-hidden />
+            Modifier
+          </Button>
+        </div>
+        {composer}
+        {conversations.length > 0 && (
+          <section aria-label="Conversations du projet">
+            <h3 className="mb-2 text-sm font-medium text-muted-foreground">Conversations du projet</h3>
+            <ul className="flex flex-col divide-y rounded-2xl border">
+              {conversations.map((c) => (
+                <li key={c.id}>
+                  <button type="button" onClick={() => onSelect(c.id)} className="flex w-full flex-col gap-0.5 px-4 py-3 text-left transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-muted/50">
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      <span className="truncate">{c.title}</span>
+                      {c.summary && <Brain className="size-3.5 shrink-0 text-muted-foreground" aria-label="Retenue dans la mémoire du projet" />}
+                    </span>
+                    {c.summary && <span className="line-clamp-2 text-sm text-muted-foreground">{c.summary.text}</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </Appear>
+    </div>
   )
 }
