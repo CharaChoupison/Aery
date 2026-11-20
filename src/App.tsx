@@ -8,12 +8,14 @@ import { MessageList } from '@/components/MessageList'
 import { ModelPicker } from '@/components/ModelPicker'
 import { SettingsDialog, type SettingsTab } from '@/components/SettingsDialog'
 import { Sidebar } from '@/components/Sidebar'
+import { UsageCard } from '@/components/UsageCard'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useChat, type Conversation } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
 import { useModelCapabilities } from '@/hooks/useModelCapabilities'
 import { useProjects } from '@/hooks/useProjects'
+import { useSlashCommands } from '@/hooks/useSlashCommands'
 import { conversationSpace, projectSpace, type Project, type Space } from '@/lib/projects'
 import { folderName, pickWorkspace, releaseWorkspace } from '@/lib/agent/tools'
 import { IS_TAURI } from '@/lib/transport'
@@ -231,19 +233,43 @@ export default function App() {
     onAddCodeProject: () => void addCodeProject(),
   }
 
+  // /usage : petite carte au-dessus du champ (fermée en changeant de conversation).
+  const [usageFor, setUsageFor] = useState<string | null>(null)
+  const place = active?.id ?? `new:${chat.activeProjectId ?? ''}:${space}`
+  const commands = useSlashCommands({
+    chat,
+    models: models.models,
+    projects: projects.projects,
+    newConversation,
+    showUsage: () => setUsageFor(place),
+    custom: prefs.commands,
+  })
+
   const composer = (
-    <Composer
-      onSend={chat.send}
-      onStop={chat.stop}
-      isStreaming={activeIsStreaming}
-      busy={isStreaming && !activeIsStreaming}
-      focusKey={active?.id ?? 'new'}
-      modelReadsImages={isVisionModel(chat.selectedModel)}
-      modelUsesTools={isToolModel(chat.selectedModel)}
-      agent={space === 'code' && activeProject ? { workspace: activeProject.workspace } : null}
-      // Espace Chat : on peut joindre un dossier en lecture seule à la conversation.
-      {...(space === 'chat' && { folder: chat.folder, onFolderChange: chat.setFolder })}
-    />
+    <div className="flex flex-col gap-2">
+      {usageFor === place && (
+        <UsageCard
+          onClose={() => setUsageFor(null)}
+          onOpenDetails={() => {
+            setUsageFor(null)
+            openSettings('usage')
+          }}
+        />
+      )}
+      <Composer
+        onSend={chat.send}
+        onStop={chat.stop}
+        isStreaming={activeIsStreaming}
+        busy={isStreaming && !activeIsStreaming}
+        focusKey={active?.id ?? 'new'}
+        modelReadsImages={isVisionModel(chat.selectedModel)}
+        modelUsesTools={isToolModel(chat.selectedModel)}
+        agent={space === 'code' && activeProject ? { workspace: activeProject.workspace } : null}
+        // Espace Chat : on peut joindre un dossier en lecture seule à la conversation.
+        {...(space === 'chat' && { folder: chat.folder, onFolderChange: chat.setFolder })}
+        commands={commands}
+      />
+    </div>
   )
   const isEmpty = !active || active.messages.length === 0
   // Largeur de la colonne de messages (réglage « Largeur de la conversation »).

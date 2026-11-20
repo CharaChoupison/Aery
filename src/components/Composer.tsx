@@ -1,8 +1,9 @@
 import { ArrowUp, Bot, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Appear } from '@/components/Appear'
 import { IconButton } from '@/components/IconButton'
+import { SlashMenu } from '@/components/SlashMenu'
 import {
   ACCEPT,
   AttachmentError,
@@ -14,6 +15,7 @@ import {
 } from '@/lib/attachments'
 import { gsap, useMotion } from '@/lib/motion'
 import { folderName, pickWorkspace, type AgentSettings } from '@/lib/agent/tools'
+import { matchCommands, parseCommand, slashOptionId, type SlashCommand, type SlashItem } from '@/lib/commands'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -44,6 +46,8 @@ interface Props {
   onFolderChange?: (folder: string | null) => void
   /** false = le modèle choisi ne sait pas appeler d'outils : pas de recherche web (null = on ne sait pas). */
   modelUsesTools?: boolean | null
+  /** Commandes slash (« /new », « /model »…) proposées quand le message commence par « / ». */
+  commands?: SlashCommand[]
 }
 
 const MAX_HEIGHT = 200 // px : au-delà, le champ défile au lieu de grandir
@@ -62,6 +66,7 @@ export function Composer({
   folder = null,
   onFolderChange,
   modelUsesTools = null,
+  commands = [],
 }: Props) {
   // Recherche web : simple préférence (activée par défaut), lue par useChat à chaque envoi.
   const { webSearch } = usePreferences()
@@ -74,6 +79,72 @@ export function Composer({
   const formRef = useRef<HTMLFormElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const motion = useMotion()
+
+  // --- Commandes slash ---------------------------------------------------------------
+  const menuId = useId()
+  const [menuIndex, setMenuIndex] = useState(0)
+  const [menuClosed, setMenuClosed] = useState(false) // Échap : fermé jusqu'à la prochaine frappe
+  const [menuPlacement, setMenuPlacement] = useState<'above' | 'below'>('above')
+  const [commandError, setCommandError] = useState<string | null>(null)
+  const parsed = commands.length ? parseCommand(value) : null
+  const current = parsed?.hasArg ? (commands.find((c) => c.name === parsed.name) ?? null) : null
+  let menuItems: SlashItem[] = []
+  if (parsed && !parsed.hasArg) menuItems = matchCommands(commands, parsed.name).map((command) => ({ kind: 'command', command }))
+  else if (current?.suggest && parsed) menuItems = current.suggest(parsed.arg).map((suggestion) => ({ kind: 'arg', command: current, suggestion }))
+  const unknown = parsed && !parsed.hasArg && parsed.name && menuItems.length === 0 ? parsed.name : null
+  const menuOpen = parsed !== null && !menuClosed && (menuItems.length > 0 || current !== null || unknown !== null)
+  const activeIndex = Math.min(menuIndex, Math.max(0, menuItems.length - 1))
+
+  /** Texte modifié (frappe ou choix dans le menu) : le menu se rouvre, l'erreur s'efface. */
+  function changeValue(next: string) {
+    // Le menu s'ouvre : au-dessus du champ s'il y a la place, sinon en dessous (accueil d'un projet).
+    if (next.startsWith('/') && !value.startsWith('/') && formRef.current) {
+      setMenuPlacement(formRef.current.getBoundingClientRect().top < 300 ? 'below' : 'above')
+    }
+    setValue(next)
+    setMenuIndex(0)
+    setMenuClosed(false)
+    setCommandError(null)
+  }
+
+  /** Exécute une commande. Les commandes qui envoient un message emportent les pièces jointes. */
+  function runCommand(command: SlashCommand, arg: string) {
+    if (command.disabled) return setCommandError(command.disabled)
+    if (command.sends && reading > 0) return setCommandError('Attends la fin de la lecture des fichiers.')
+    const error = command.run(arg, command.sends ? attachments : [])
+    if (error) return setCommandError(error)
+    setValue('')
+    setCommandError(null)
+    if (command.sends) {
+      setAttachments([])
+      setFileError(null)
+      pouf()
+    }
+  }
+
+  /** Choix d'une ligne du menu. complete = Tab : on complète le texte sans rien exécuter. */
+  function chooseItem(index: number, complete = false) {
+    const item = menuItems[index]
+    if (!item) return
+    const c = item.command
+    if (item.kind === 'command') {
+      if (!complete && !c.argHint) runCommand(c, '')
+      else changeValue(`/${c.name}${c.argHint ? ' ' : ''}`)
+    } else if (!complete && c.argIsChoice) {
+      runCommand(c, item.suggestion.value)
+    } else {
+      changeValue(`/${c.name} ${item.suggestion.value}${c.argIsChoice ? '' : ' '}`)
+    }
+    ref.current?.focus()
+  }
+
+  function moveSelection(delta: number) {
+    const n = menuItems.length
+    if (!n) return
+    const next = (activeIndex + delta + n) % n
+    setMenuIndex(next)
+    document.getElementById(slashOptionId(menuId, next))?.scrollIntoView({ block: 'nearest' })
+  }
 
   // Le champ grandit avec le texte : on remet la hauteur à « auto », puis on prend la hauteur du contenu.
   useLayoutEffect(() => {
@@ -187,19 +258,46 @@ export function Composer({
 
   const canSend = (value.trim() !== '' || attachments.length > 0) && reading === 0 && !busy
 
-  function submit() {
-    if (!canSend || isStreaming) return
-    onSend(value, attachments)
-    setValue('')
-    setAttachments([])
-    setFileError(null)
-    // Petit « pouf » de la zone de saisie à l'envoi (animation ponctuelle, pas besoin de useGSAP).
+  /** Petit « pouf » de la zone de saisie à l'envoi (animation ponctuelle, pas besoin de useGSAP). */
+  function pouf() {
     if (motion && formRef.current) {
       gsap.fromTo(formRef.current, { scale: 0.98 }, { scale: 1, duration: 0.5, ease: 'elastic.out(1, 0.4)', clearProps: 'transform' })
     }
   }
 
+  function submit() {
+    // Commande connue (« /new », « /model auto »…) : exécutée, même pendant une réponse
+    // (c'est la commande qui dit si elle peut attendre). Inconnue : envoyée comme un message.
+    const command = parsed && commands.find((c) => c.name === parsed.name)
+    if (command) return runCommand(command, parsed.arg)
+    if (!canSend || isStreaming) return
+    onSend(value, attachments)
+    setValue('')
+    setAttachments([])
+    setFileError(null)
+    pouf()
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (menuOpen && !e.nativeEvent.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (menuItems.length) {
+          e.preventDefault()
+          moveSelection(e.key === 'ArrowDown' ? 1 : -1)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMenuClosed(true)
+        return
+      }
+      if (menuItems.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+        e.preventDefault()
+        chooseItem(activeIndex, e.key === 'Tab')
+        return
+      }
+    }
     // isComposing : l'utilisateur tape un caractère composé (accents sur certains claviers, japonais…).
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isTouch) {
       e.preventDefault()
@@ -210,7 +308,19 @@ export function Composer({
   const imageAttached = attachments.some((a) => a.kind === 'image')
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="relative flex flex-col gap-2">
+      {menuOpen && (
+        <SlashMenu
+          id={menuId}
+          items={menuItems}
+          activeIndex={activeIndex}
+          current={current}
+          unknown={unknown}
+          placement={menuPlacement}
+          onHover={setMenuIndex}
+          onChoose={(i) => chooseItem(i)}
+        />
+      )}
       <form
         ref={formRef}
         onSubmit={(e) => {
@@ -316,8 +426,10 @@ export function Composer({
           <textarea
             ref={ref}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => changeValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onBlur={() => setMenuClosed(true)}
+            onFocus={() => setMenuClosed(false)}
             onPaste={(e) => {
               // Une capture d'écran collée (Cmd+V) devient une pièce jointe.
               const files = [...e.clipboardData.files]
@@ -327,8 +439,15 @@ export function Composer({
               }
             }}
             rows={1}
-            placeholder={agent ? 'Demande quelque chose à l’agent…' : 'Écris ton message…'}
+            placeholder={agent ? 'Demande quelque chose à l’agent…' : commands.length ? 'Écris ton message, ou / pour les commandes…' : 'Écris ton message…'}
             aria-label="Message"
+            {...(commands.length > 0 && {
+              role: 'combobox',
+              'aria-autocomplete': 'list' as const,
+              'aria-expanded': menuOpen,
+              'aria-controls': menuOpen && menuItems.length ? menuId : undefined,
+              'aria-activedescendant': menuOpen && menuItems.length ? slashOptionId(menuId, activeIndex) : undefined,
+            })}
             className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-none placeholder:text-muted-foreground"
           />
           {isStreaming ? (
@@ -369,6 +488,12 @@ export function Composer({
           document.body,
         )}
 
+      {commandError && (
+        <p role="alert" className="flex items-center gap-1.5 px-3 text-xs text-destructive">
+          <CircleAlert className="size-3.5 shrink-0" aria-hidden />
+          {commandError}
+        </p>
+      )}
       {fileError && (
         <p role="alert" className="flex items-center gap-1.5 px-3 text-xs text-destructive">
           <CircleAlert className="size-3.5 shrink-0" aria-hidden />

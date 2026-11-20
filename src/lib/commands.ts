@@ -1,4 +1,20 @@
-import type { LucideIcon } from 'lucide-react'
+import {
+  Code,
+  FolderInput,
+  Gauge,
+  Globe,
+  GlobeLock,
+  Languages,
+  Lightbulb,
+  ListChecks,
+  Pencil,
+  RefreshCw,
+  Sparkles,
+  SpellCheck,
+  SquarePen,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 import type { Attachment } from '@/lib/attachments'
 
 /**
@@ -29,11 +45,19 @@ export interface SlashCommand {
   sends?: boolean
   /** Commande créée par l'utilisateur dans les Paramètres. */
   custom?: boolean
+  /** true : une proposition est l'argument entier (Entrée l'exécute) ; sinon elle complète le texte. */
+  argIsChoice?: boolean
   /** Propositions pour l'argument, filtrées sur ce qui est déjà tapé. */
   suggest?: (arg: string) => CommandSuggestion[]
   /** Exécute la commande. Renvoie un message d'erreur, ou rien si tout s'est bien passé. */
   run: (arg: string, attachments: Attachment[]) => string | void
 }
+
+/** Une ligne du menu : une commande (on tape encore son nom) ou une proposition d'argument. */
+export type SlashItem = { kind: 'command'; command: SlashCommand } | { kind: 'arg'; command: SlashCommand; suggestion: CommandSuggestion }
+
+/** id HTML d'une ligne du menu (pour aria-activedescendant). */
+export const slashOptionId = (listId: string, index: number) => `${listId}-${index}`
 
 /** Ce qui est tapé dans le champ, s'il s'agit d'une commande. */
 export interface ParsedCommand {
@@ -68,9 +92,10 @@ export function filterSuggestions(items: CommandSuggestion[], arg: string, max =
   const fold = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
   const q = fold(arg)
   if (!q) return items.slice(0, max)
-  const starts = items.filter((i) => fold(i.value).startsWith(q) || fold(i.label).startsWith(q))
-  const contains = items.filter((i) => !starts.includes(i) && (fold(i.value).includes(q) || fold(i.label).includes(q)))
-  return [...starts, ...contains].slice(0, max)
+  const exact = items.filter((i) => fold(i.value) === q || fold(i.label) === q)
+  const starts = items.filter((i) => !exact.includes(i) && (fold(i.value).startsWith(q) || fold(i.label).startsWith(q)))
+  const contains = items.filter((i) => !exact.includes(i) && !starts.includes(i) && (fold(i.value).includes(q) || fold(i.label).includes(q)))
+  return [...exact, ...starts, ...contains].slice(0, max)
 }
 
 /** Premier mot de l'argument, et le reste (« anglais bonjour à tous » → ['anglais', 'bonjour à tous']). */
@@ -159,20 +184,31 @@ export function sanitizeCustomCommands(raw: unknown): CustomCommand[] {
   return out
 }
 
-/** Noms des commandes intégrées (une commande personnalisée ne peut pas les reprendre). */
-export const BUILTIN_NAMES = [
-  'new',
-  'model',
-  'search',
-  'nosearch',
-  'fusion',
-  'retry',
-  'title',
-  'move',
-  'usage',
-  'resume',
-  'traduis',
-  'corrige',
-  'explique',
-  'code',
+// --- Commandes intégrées ---------------------------------------------------------------
+
+/** Nom, description et icône des commandes intégrées (le menu et la page Paramètres › Commandes). */
+export const BUILTIN_COMMANDS: Pick<SlashCommand, 'name' | 'description' | 'icon' | 'argHint'>[] = [
+  { name: 'new', description: 'Nouvelle conversation', icon: SquarePen },
+  { name: 'model', description: 'Changer de modèle', icon: Sparkles, argHint: '<modèle>' },
+  { name: 'search', description: 'Chercher sur le web pour ce message', icon: Globe, argHint: '<message>' },
+  { name: 'nosearch', description: 'Répondre sans recherche web, pour ce message', icon: GlobeLock, argHint: '<message>' },
+  { name: 'fusion', description: 'Plusieurs modèles répondent, un juge assemble (plusieurs requêtes)', icon: Users, argHint: '<message>' },
+  { name: 'retry', description: 'Régénérer la dernière réponse', icon: RefreshCw },
+  { name: 'title', description: 'Renommer la conversation', icon: Pencil, argHint: '<titre>' },
+  { name: 'move', description: 'Déplacer la conversation dans un projet', icon: FolderInput, argHint: '<projet>' },
+  { name: 'usage', description: 'Voir sa consommation des dernières 24 h', icon: Gauge },
+  { name: 'resume', description: 'Résumer la conversation', icon: ListChecks, argHint: '[consigne]' },
+  { name: 'traduis', description: 'Traduire un texte (ou la dernière réponse)', icon: Languages, argHint: '<langue> [texte]' },
+  { name: 'corrige', description: 'Corriger l’orthographe et la grammaire', icon: SpellCheck, argHint: '<texte>' },
+  { name: 'explique', description: 'Expliquer simplement (ou la dernière réponse)', icon: Lightbulb, argHint: '[sujet]' },
+  { name: 'code', description: 'Réponse avec du code uniquement', icon: Code, argHint: '<langage> <demande>' },
 ]
+
+export const BUILTIN_NAMES = BUILTIN_COMMANDS.map((c) => c.name)
+
+/** Les infos d'une commande intégrée, à compléter par son action (useSlashCommands). */
+export function builtin(name: string): Pick<SlashCommand, 'name' | 'description' | 'icon' | 'argHint'> {
+  const found = BUILTIN_COMMANDS.find((c) => c.name === name)
+  if (!found) throw new Error(`Commande inconnue : /${name}`)
+  return found
+}

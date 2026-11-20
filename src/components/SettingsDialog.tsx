@@ -18,6 +18,7 @@ import {
   Search,
   Settings as SettingsIcon,
   SlidersHorizontal,
+  SquareSlash,
   Sun,
   Trash2,
   UserRound,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Appear } from '@/components/Appear'
+import { CommandsPage } from '@/components/settings/CommandsPage'
 import { KeysPage } from '@/components/settings/KeysPage'
 import { Group, Notice, Row, SelectControl } from '@/components/settings/layout'
 import { ProfilePage } from '@/components/settings/ProfilePage'
@@ -54,7 +56,7 @@ import { IS_TAURI } from '@/lib/transport'
 import { CAN_UPDATE, checkForUpdates, startUpdate, useUpdates } from '@/lib/updates'
 import { cn } from '@/lib/utils'
 
-export type SettingsTab = 'general' | 'profile' | 'model' | 'connection' | 'models' | 'keys' | 'usage' | 'analytics' | 'updates'
+export type SettingsTab = 'general' | 'profile' | 'model' | 'commands' | 'connection' | 'models' | 'keys' | 'usage' | 'analytics' | 'updates'
 
 interface Props {
   open: boolean
@@ -89,6 +91,13 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; 
     icon: SlidersHorizontal,
     group: 'Préférences',
     keywords: 'réglages du modèle température top p max tokens échantillonnage historique mémoire messages',
+  },
+  {
+    id: 'commands',
+    label: 'Commandes',
+    icon: SquareSlash,
+    group: 'Préférences',
+    keywords: 'commandes slash raccourcis prompt modèle de message perso personnalisées',
   },
   { id: 'connection', label: 'Connexion', icon: PlugZap, group: 'FreeLLMAPI', keywords: 'clé api port freellmapi tester' },
   {
@@ -136,7 +145,7 @@ export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSa
         <div className="flex h-14 shrink-0 items-center border-b px-5">
           <DialogTitle className="text-base font-semibold">Paramètres</DialogTitle>
           <DialogDescription className="sr-only">
-            Apparence, personnalisation, réglages de génération, connexion à FreeLLMAPI, modèles, clés et utilisation.
+            Apparence, personnalisation, réglages de génération, commandes, connexion à FreeLLMAPI, modèles, clés et utilisation.
           </DialogDescription>
         </div>
 
@@ -193,6 +202,7 @@ export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSa
               {current.id === 'general' && <GeneralPage />}
               {current.id === 'profile' && <ProfilePage />}
               {current.id === 'model' && <ModelPage />}
+              {current.id === 'commands' && <CommandsPage />}
               {/* Recréée à chaque ouverture : la clé tapée ne reste jamais en mémoire. */}
               {current.id === 'connection' && <ConnectionPage settings={settings} onSaved={onSaved} />}
               {current.id === 'models' && <ModelsPage onChanged={onModelsChanged} />}
