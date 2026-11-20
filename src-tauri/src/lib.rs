@@ -2,9 +2,11 @@
 //!  - settings : clé FreeLLMAPI dans le Trousseau macOS + port ;
 //!  - proxy    : relais en streaming vers FreeLLMAPI, qui ajoute la clé ;
 //!  - admin    : API d’admin FreeLLMAPI (statistiques en lecture + activer un modèle, stratégie de routage, ajouter/supprimer une clé) ;
+//!  - launcher : lance FreeLLMAPI en arrière-plan si elle n'est pas ouverte ;
 //!  - updates  : mise à jour de l'appli depuis le repo git du projet.
 
 mod admin;
+mod launcher;
 mod proxy;
 mod settings;
 mod updates;
@@ -14,6 +16,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(proxy::Requests::default())
         .manage(admin::DashboardSession::default())
+        .setup(|app| {
+            // Dès l'ouverture, pour que FreeLLMAPI soit prête avant le premier message.
+            let port = settings::read_port(app.handle());
+            tauri::async_runtime::spawn(launcher::ensure_running(port));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             settings::get_settings,
             settings::save_settings,

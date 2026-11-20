@@ -4,7 +4,7 @@
 //! (lue dans le Trousseau) et on renvoie la réponse morceau par morceau via un `Channel`,
 //! pour que le streaming SSE arrive en direct. `cancel_request` coupe tout (bouton Stop).
 
-use crate::{admin, settings};
+use crate::{admin, launcher, settings};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Mutex, time::Duration};
@@ -79,7 +79,7 @@ pub async fn forward(port: u16, key: &str, method: &str, path: &str, body: Optio
         Ok(r) => r,
         Err(_) => {
             let message = format!(
-                "FreeLLMAPI ne répond pas sur le port {port}. Vérifie que l’appli est lancée (et le port dans les Paramètres)."
+                "FreeLLMAPI ne répond pas sur le port {port}. Aery a essayé de la lancer sans succès : vérifie qu’elle est bien installée, et le port dans les Paramètres."
             );
             return emit_json_error(&emit, 502, "upstream_unreachable", &message);
         }
@@ -148,7 +148,10 @@ pub fn proxy_request(
                 "no_key",
                 "Aucune clé FreeLLMAPI configurée. Ouvre les Paramètres pour la coller.",
             ),
-            Some(key) => forward(port, &key, &request.method, &request.path, request.body, emit).await,
+            Some(key) => {
+                launcher::ensure_running(port).await;
+                forward(port, &key, &request.method, &request.path, request.body, emit).await
+            }
         }
         if let Ok(mut running) = task_app.state::<Requests>().0.lock() {
             running.remove(&id);
@@ -178,6 +181,7 @@ fn admin_request(
     let task_app = app.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let emit = |event: ProxyEvent| on_event.send(event).is_ok();
+        launcher::ensure_running(port).await;
         let session = task_app.state::<admin::DashboardSession>();
         match admin::send(&session, port, method, &api_path, body).await {
             Ok((status, content_type, body)) => {
