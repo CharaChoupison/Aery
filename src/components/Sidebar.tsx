@@ -33,6 +33,8 @@ import type { Conversation } from '@/hooks/useChat'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { useUpdates } from '@/lib/updates'
 import { Appear } from '@/components/Appear'
+import { dragRegion, TRAFFIC_LIGHTS_INSET } from '@/lib/titlebar'
+import { NavArrows, type NavControls } from '@/components/NavArrows'
 
 interface Props {
   conversations: Conversation[]
@@ -52,6 +54,10 @@ interface Props {
   onNavigate: (view: View) => void
   /** Bouton « replier » : seulement sur grand écran (sur mobile, le panneau se ferme tout seul). */
   onCollapse?: () => void
+  /** Appli macOS : les boutons de fenêtre sont posés sur le haut de la barre, on leur laisse la place. */
+  trafficLights?: boolean
+  /** Flèches Précédent / Suivant. */
+  nav?: NavControls
 }
 
 // --- Regroupement par date, comme ChatGPT -------------------------------------------
@@ -82,7 +88,7 @@ function groupByDate(conversations: Conversation[]): { label: string; items: Con
 // --- La barre latérale ---------------------------------------------------------------
 
 export function Sidebar(props: Props) {
-  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, view, onNavigate } = props
+  const { conversations, loaded, storageError, onNew, onOpenSettings, onOpenUpdates, onCollapse, onDelete, view, onNavigate, trafficLights, nav } = props
   const updates = useUpdates()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const motion = useMotion()
@@ -99,18 +105,30 @@ export function Sidebar(props: Props) {
     { scope: navRef, dependencies: [loaded] },
   )
 
+  const collapseButton = onCollapse && (
+    <IconButton label="Masquer la barre latérale" onClick={onCollapse}>
+      <PanelLeftClose className="size-5" aria-hidden />
+    </IconButton>
+  )
+
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex h-14 items-center justify-between px-3">
-        <span className="flex items-center gap-2 font-semibold">
-          <AeryLogo className="size-5" aria-hidden />
-          Aery
-        </span>
-        {onCollapse && (
-          <IconButton label="Masquer la barre latérale" onClick={onCollapse}>
-            <PanelLeftClose className="size-5" aria-hidden />
-          </IconButton>
+      {/* En-tête = aussi la barre de titre de la fenêtre (on peut l'attraper pour la déplacer).
+          Appli macOS, comme Claude : boutons de fenêtre, puis replier + flèches, sans logo
+          (il est déjà sur l'écran d'accueil). Version web : logo à gauche, boutons à droite. */}
+      <div
+        {...dragRegion}
+        className={cn('flex h-12 shrink-0 items-center gap-0.5 px-2 select-none', trafficLights && TRAFFIC_LIGHTS_INSET)}
+      >
+        {!trafficLights && (
+          <span className="pointer-events-none mr-auto flex items-center gap-2 px-1 font-semibold">
+            <AeryLogo className="size-5" aria-hidden />
+            Aery
+          </span>
         )}
+        {trafficLights && collapseButton}
+        {nav && <NavArrows nav={nav} />}
+        {!trafficLights && collapseButton}
       </div>
 
       <div className="px-2">

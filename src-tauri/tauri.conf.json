@@ -18,7 +18,10 @@
         "minWidth": 380,
         "minHeight": 500,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 18, "y": 27 }
       }
     ],
     "security": {

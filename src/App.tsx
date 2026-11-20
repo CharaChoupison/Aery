@@ -1,6 +1,6 @@
 import { PanelLeft, SlidersHorizontal, SquarePen } from 'lucide-react'
 import { AeryLogo } from '@/components/AeryLogo'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { Composer } from '@/components/Composer'
 import { IconButton } from '@/components/IconButton'
@@ -12,6 +12,8 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useChat } from '@/hooks/useChat'
 import { useModels } from '@/hooks/useModels'
+import { useNavHistory, type Place } from '@/hooks/useNavHistory'
+import { NavArrows, useNavShortcuts } from '@/components/NavArrows'
 import { ApiError, getSettings, type Settings } from '@/lib/api'
 import { AnalyticsPage } from '@/pages/AnalyticsPage'
 import { ModelsPage } from '@/pages/ModelsPage'
@@ -19,6 +21,7 @@ import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { hasCustomModelSettings, usePreferences } from '@/lib/preferences'
 import { useTheme } from '@/lib/theme'
 import { startUpdateChecks } from '@/lib/updates'
+import { dragRegion, TRAFFIC_LIGHTS_INSET, TRAFFIC_LIGHTS_INSET_NARROW, useTrafficLights } from '@/lib/titlebar'
 import { cn } from '@/lib/utils'
 
 /** Largeur de la barre latérale sur grand écran (w-64). */
@@ -40,6 +43,7 @@ export default function App() {
   const prefs = usePreferences()
   const motion = useMotion()
   useTheme(prefs.theme)
+  const trafficLights = useTrafficLights() // appli macOS : boutons de fenêtre posés sur la page
 
   function openSettings(tab: SettingsTab) {
     setSettingsTab(tab)
@@ -50,6 +54,29 @@ export default function App() {
   const models = useModels(settings?.hasKey ?? false)
   const { active, activeError, isStreaming, streamingId } = chat
   const activeIsStreaming = active !== null && streamingId === active.id
+
+  // Précédent / Suivant : l'historique observe la page et la conversation ouvertes.
+  const { selectConversation, newConversation: resetConversation, conversations } = chat
+  const goTo = useCallback(
+    (place: Place) => {
+      if (place.view === 'chat') {
+        if (place.conversationId) selectConversation(place.conversationId)
+        else resetConversation()
+      }
+      setView(place.view)
+    },
+    [selectConversation, resetConversation],
+  )
+  const placeExists = useCallback(
+    (place: Place) => !place.conversationId || conversations.some((c) => c.id === place.conversationId),
+    [conversations],
+  )
+  const nav = useNavHistory(
+    { view, conversationId: view === 'chat' ? (active?.id ?? null) : null },
+    goTo,
+    placeExists,
+  )
+  useNavShortcuts(nav)
 
   // Au démarrage : on récupère les réglages, et s'il n'y a pas de clé on ouvre les paramètres.
   useEffect(() => {
@@ -93,6 +120,8 @@ export default function App() {
       setMobileSidebarOpen(false)
       openSettings('updates')
     },
+    trafficLights,
+    nav,
   }
 
   const composer = (
@@ -145,7 +174,15 @@ export default function App() {
         </Sheet>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-14 shrink-0 items-center gap-1 px-2">
+          {/* En-tête = barre de titre de la fenêtre. Si la barre latérale est cachée (repliée, ou
+              fenêtre étroite), les boutons de fenêtre tombent ici : on leur laisse la place. */}
+          <header
+            {...dragRegion}
+            className={cn(
+              'flex h-12 shrink-0 items-center gap-0.5 px-2 select-none',
+              trafficLights && (sidebarOpen ? TRAFFIC_LIGHTS_INSET_NARROW : TRAFFIC_LIGHTS_INSET),
+            )}
+          >
             <div className="md:hidden">
               <IconButton label="Ouvrir la barre latérale" onClick={() => setMobileSidebarOpen(true)}>
                 <PanelLeft className="size-5" aria-hidden />
@@ -156,12 +193,13 @@ export default function App() {
                 <IconButton label="Afficher la barre latérale" onClick={() => setSidebarOpen(true)}>
                   <PanelLeft className="size-5" aria-hidden />
                 </IconButton>
+                <NavArrows nav={nav} />
                 <IconButton label="Nouvelle conversation" onClick={newConversation}>
                   <SquarePen className="size-5" aria-hidden />
                 </IconButton>
               </Appear>
             )}
-            <span className="min-w-0 truncate px-2 text-sm font-medium">
+            <span className="pointer-events-none min-w-0 truncate px-2 text-sm font-medium">
               {view === 'chat' ? (active?.title ?? 'Nouvelle conversation') : VIEW_TITLES[view]}
             </span>
             <div className={cn('ml-auto items-center gap-1', view === 'chat' ? 'flex' : 'hidden')}>
