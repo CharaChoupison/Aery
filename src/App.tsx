@@ -475,6 +475,7 @@ export default function App() {
               brain={brain}
               projects={projects.projects}
               canOpenOrigin={chat.conversations.some((c) => c.id === openNote.origin?.conversationId)}
+              model={chat.selectedModel}
               onBack={() => setNoteId(null)}
               onOpenNote={showNote}
               onOpenOrigin={() => openNote.origin && chat.selectConversation(openNote.origin.conversationId)}

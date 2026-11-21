@@ -30,6 +30,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Appear } from '@/components/Appear'
 import { BRAIN_KIND_ICONS } from '@/components/brain/kinds'
 import { BrainHistoryDialog } from '@/components/brain/BrainHistoryDialog'
+import { NoteAiBar, type NoteRange } from '@/components/brain/NoteAiBar'
 import { Markdown, NoteLinkContext } from '@/components/Markdown'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import {
@@ -105,6 +106,7 @@ export function BrainNotePage({
   brain,
   projects,
   canOpenOrigin,
+  model,
   onBack,
   onOpenNote,
   onOpenOrigin,
@@ -113,6 +115,8 @@ export function BrainNotePage({
   brain: Brain
   projects: Project[]
   canOpenOrigin: boolean
+  /** Modèle choisi dans l'en-tête, pour la barre « Demande à l'IA ». */
+  model?: string
   onBack: () => void
   onOpenNote: (id: string) => void
   onOpenOrigin: () => void
@@ -131,6 +135,8 @@ export function BrainNotePage({
   const pendingPatch = useRef<Partial<Draft>>({})
   const titleRef = useRef<HTMLTextAreaElement>(null)
   const contentRef = useRef<HTMLTextAreaElement>(null)
+  /** On a cliqué dans le texte : sa sélection / son curseur comptent pour la barre IA. */
+  const contentTouched = useRef(false)
   const Icon = BRAIN_KIND_ICONS[item.kind]
 
   // --- Enregistrement automatique -------------------------------------------------------
@@ -231,6 +237,26 @@ export function BrainNotePage({
     else change({ projectIds: [...draft.projectIds, project.id] })
   }
 
+  /** Sélection ou curseur dans le texte (seulement en écriture et si on y a cliqué). */
+  const getRange = useCallback((): NoteRange | null => {
+    const el = contentRef.current
+    if (!el || !contentTouched.current) return null
+    return { start: el.selectionStart, end: el.selectionEnd }
+  }, [])
+
+  /** Texte de l'IA appliqué : enregistré tout de suite, curseur placé juste après. */
+  function applyAi(content: string, caret: number) {
+    change({ content })
+    flush()
+    if (!editing) return
+    afterRender(() => {
+      const area = contentRef.current
+      if (!area) return
+      area.focus()
+      area.setSelectionRange(caret, caret)
+    })
+  }
+
   const folders = useMemo(() => [...new Set([...PARA_FOLDERS, ...allFolders(brain.items)])].sort((a, b) => a.localeCompare(b, 'fr')), [brain.items])
   const related = useMemo(() => relatedItems({ ...item, content: draft.content }, brain.items), [item, draft.content, brain.items])
   const rendered = useMemo(() => linkifyWikilinks(draft.content, brain.items), [draft.content, brain.items])
@@ -321,7 +347,7 @@ export function BrainNotePage({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <Appear from={{ autoAlpha: 0, y: 12, duration: 0.4 }} className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-10 pb-24 sm:px-12">
+        <Appear from={{ autoAlpha: 0, y: 12, duration: 0.4 }} className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-10 pb-10 sm:px-12">
           <textarea
             ref={titleRef}
             rows={1}
@@ -497,6 +523,7 @@ export function BrainNotePage({
               value={draft.content}
               onChange={(e) => change({ content: e.target.value.slice(0, BRAIN_LIMITS.content) })}
               onBlur={flush}
+              onFocus={() => (contentTouched.current = true)}
               autoFocus={Boolean(item.title) && empty}
               placeholder="Écris ici, ou choisis un modèle. Markdown accepté, [[Titre]] pour lier une autre note."
               aria-label="Contenu"
@@ -521,6 +548,8 @@ export function BrainNotePage({
           )}
         </Appear>
       </div>
+
+      <NoteAiBar title={draft.title} content={draft.content} model={model} getRange={getRange} onApply={applyAi} />
 
       {historyOpen && <BrainHistoryDialog item={item} onRestore={brain.restore} onClose={() => setHistoryOpen(false)} />}
 
