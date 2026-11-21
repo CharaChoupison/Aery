@@ -1,6 +1,7 @@
 import { ArrowUp, Check, CircleAlert, LoaderCircle, RotateCcw, Sparkles, Square, TextCursorInput, Undo2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Markdown } from '@/components/Markdown'
+import { gsap, useMotion } from '@/lib/motion'
 import { Button } from '@/components/ui/button'
 import { ApiError, isAbortError, streamChat } from '@/lib/api'
 import { BRAIN_LIMITS } from '@/lib/brain'
@@ -47,15 +48,19 @@ export function NoteAiBar({
   /** Sélection vue quand on entre dans la barre : affichée en pastille. */
   const [selection, setSelection] = useState<NoteRange | null>(null)
   const [lastRequest, setLastRequest] = useState('')
+  /** Repliée en bulle (en bas à droite) tant qu'on ne s'en sert pas : la génération reste discrète. */
+  const [expanded, setExpanded] = useState(false)
+  const motion = useMotion()
   const controller = useRef<AbortController | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
 
   // ⌘J (Ctrl+J) : aller dans la barre, depuis n'importe où dans la page.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
         e.preventDefault()
-        inputRef.current?.focus()
+        expand()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -70,6 +75,13 @@ export function NoteAiBar({
     el.style.height = '0px'
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`
   }, [request])
+
+  function expand() {
+    setExpanded(true)
+    // Le champ n'existe qu'une fois la barre dépliée : on attend le rendu (pas requestAnimationFrame,
+    // qui ne tourne pas fenêtre en arrière-plan).
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
 
   const undoable = undo !== null && undo.after === content
 
@@ -140,6 +152,7 @@ export function NoteAiBar({
     setUndo({ before: content, after })
     onApply(after, Math.min(next.caret, after.length))
     discard()
+    setExpanded(false)
   }
 
   function discard() {
@@ -148,17 +161,30 @@ export function NoteAiBar({
     setResult('')
     setError(null)
     setSelection(null)
+    if (!request.trim()) setExpanded(false)
   }
 
   const open = phase !== 'idle'
+  const shown = expanded || open
+
+  // Dépliage : la bulle s'étire vers la gauche jusqu'à la largeur de la page.
+  useLayoutEffect(() => {
+    const bar = barRef.current
+    if (!shown || !bar || !motion) return
+    const tween = gsap.fromTo(bar, { width: 48 }, { width: '100%', duration: 0.35, ease: 'power3.out', clearProps: 'width' })
+    return () => {
+      tween.kill()
+    }
+  }, [shown, motion])
   const replaceLabel = selection ? 'Remplacer la sélection' : 'Remplacer la note'
   const insertLabel = selection ? 'Insérer après' : 'Insérer'
 
   return (
-    <div className="shrink-0 px-4 pb-4">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+    // Posée par-dessus le bas de la page (le parent est en `relative`) ; seuls ses éléments captent la souris.
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-col items-end gap-2">
         {open && (
-          <div className="flex max-h-[45dvh] flex-col overflow-hidden rounded-2xl border bg-background shadow-lg" aria-live="polite">
+          <div className="pointer-events-auto flex max-h-[45dvh] w-full flex-col overflow-hidden rounded-2xl border bg-background shadow-lg" aria-live="polite">
             <div className="flex items-center gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
               <Sparkles className="size-3.5" aria-hidden />
               <span className="min-w-0 flex-1 truncate">
@@ -210,7 +236,7 @@ export function NoteAiBar({
         )}
 
         {undoable && !open && (
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground shadow-sm">
             Texte de l’IA ajouté à la note.
             <Button
               size="xs"
@@ -226,10 +252,28 @@ export function NoteAiBar({
           </div>
         )}
 
-        <div className="flex items-end gap-2 rounded-2xl border bg-background p-1.5 pl-3 shadow-sm focus-within:ring-2 focus-within:ring-ring/40">
-          <Sparkles className="mb-2 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        {!shown ? (
+          <button
+            type="button"
+            onClick={expand}
+            aria-label="Demander à l’IA (⌘J)"
+            title="Demander à l’IA (⌘J)"
+            className="pointer-events-auto flex size-12 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-md transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <Sparkles className="size-5" aria-hidden />
+          </button>
+        ) : (
+        <div
+          ref={barRef}
+          onBlur={(e) => {
+            // On clique ailleurs sans avoir rien demandé : la barre redevient une bulle.
+            if (!e.currentTarget.contains(e.relatedTarget) && !request.trim() && phase === 'idle') setExpanded(false)
+          }}
+          className="pointer-events-auto flex min-h-12 w-full items-center gap-2 rounded-3xl border bg-background py-1.5 pr-1.5 pl-4 shadow-md focus-within:ring-2 focus-within:ring-ring/40"
+        >
+          <Sparkles className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           {selection && phase === 'idle' && (
-            <span className="mb-1 flex h-7 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-xs text-muted-foreground">
+            <span className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-xs text-muted-foreground">
               <TextCursorInput className="size-3.5" aria-hidden />
               Sélection
               <button type="button" onClick={() => setSelection(null)} aria-label="Ignorer la sélection" title="Ignorer la sélection" className="rounded-full p-0.5 hover:text-foreground">
@@ -254,21 +298,24 @@ export function NoteAiBar({
               } else if (e.key === 'Escape') {
                 e.preventDefault()
                 if (open) discard()
-                else e.currentTarget.blur()
+                else {
+                  setRequest('')
+                  setExpanded(false)
+                }
               }
             }}
             placeholder={selection ? 'Que faire de la sélection ? (reformuler, raccourcir…)' : 'Demande à l’IA d’écrire dans la note… (⌘J)'}
             aria-label="Demande à l’IA"
-            className="max-h-36 min-h-9 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground/70"
+            className="max-h-36 min-w-0 flex-1 resize-none bg-transparent py-1.5 text-sm leading-5 outline-none placeholder:text-muted-foreground/70"
           />
           {phase === 'streaming' ? (
-            <Button size="icon-sm" variant="secondary" className="mb-0.5 rounded-full" onClick={() => controller.current?.abort()} aria-label="Arrêter" title="Arrêter">
+            <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => controller.current?.abort()} aria-label="Arrêter" title="Arrêter">
               <Square className="fill-current" aria-hidden />
             </Button>
           ) : (
             <Button
               size="icon-sm"
-              className={cn('mb-0.5 rounded-full', !request.trim() && 'opacity-50')}
+              className={cn('shrink-0 rounded-full', !request.trim() && 'opacity-50')}
               disabled={!request.trim()}
               onClick={() => void run(request)}
               aria-label="Envoyer la demande"
@@ -278,6 +325,7 @@ export function NoteAiBar({
             </Button>
           )}
         </div>
+        )}
       </div>
     </div>
   )

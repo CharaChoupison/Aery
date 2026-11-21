@@ -265,7 +265,7 @@ export function BrainNotePage({
   const dateFormat = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {/* Barre d'outils : retour, type de page, insertions, état de l'enregistrement, menu. */}
       <div className="flex h-11 shrink-0 items-center gap-1 px-3">
         <ToolButton label="Retour au cerveau" onClick={onBack}>
@@ -347,7 +347,7 @@ export function BrainNotePage({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <Appear from={{ autoAlpha: 0, y: 12, duration: 0.4 }} className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-10 pb-10 sm:px-12">
+        <Appear from={{ autoAlpha: 0, y: 12, duration: 0.4 }} className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-10 pb-32 sm:px-12">
           <textarea
             ref={titleRef}
             rows={1}
