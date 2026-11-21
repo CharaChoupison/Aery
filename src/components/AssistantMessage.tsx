@@ -1,4 +1,4 @@
-import { BookmarkCheck, BookmarkPlus, Brain, ChevronRight, Cpu, Eye, LoaderCircle, Square } from 'lucide-react'
+import { BookmarkCheck, BookmarkPlus, Brain, ChevronRight, Cpu, Eye, GitBranchPlus, LoaderCircle, RotateCcw, Square } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { AgentSteps } from '@/components/AgentSteps'
 import { Appear } from '@/components/Appear'
@@ -18,10 +18,14 @@ interface Props {
   saved?: boolean
   /** « Garder dans le cerveau » (absent = bouton masqué). */
   onSave?: (answer: string) => void
+  /** « Réessayer » : refait cette réponse (absent = bouton masqué, seulement sur la dernière). */
+  onRetry?: () => void
+  /** « Dupliquer à partir d'ici » : nouvelle conversation qui s'arrête à cette réponse. */
+  onDuplicate?: () => void
 }
 
 /** Une réponse de l'assistant : réflexion éventuelle, texte Markdown, actions. */
-export function AssistantMessage({ message: m, streaming, isLast, saved = false, onSave }: Props) {
+export function AssistantMessage({ message: m, streaming, isLast, saved = false, onSave, onRetry, onDuplicate }: Props) {
   // La réflexion peut arriver dans un champ à part (m.reasoning) ou entre balises <think> dans le texte.
   const inline = splitThinking(m.content)
   const thinking = [m.reasoning, inline.thinking].filter(Boolean).join('\n\n')
@@ -76,6 +80,16 @@ export function AssistantMessage({ message: m, streaming, isLast, saved = false,
               className={cn(saved && 'text-primary')}
             >
               {saved ? <BookmarkCheck className="size-3.5" aria-hidden /> : <BookmarkPlus className="size-3.5" aria-hidden />}
+            </IconButton>
+          )}
+          {onRetry && (
+            <IconButton label="Réessayer" size="icon-sm" onClick={onRetry}>
+              <RotateCcw className="size-3.5" aria-hidden />
+            </IconButton>
+          )}
+          {onDuplicate && (
+            <IconButton label="Dupliquer à partir d’ici" size="icon-sm" onClick={onDuplicate}>
+              <GitBranchPlus className="size-3.5" aria-hidden />
             </IconButton>
           )}
           {m.model && (

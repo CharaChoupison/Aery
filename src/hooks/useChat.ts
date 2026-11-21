@@ -547,6 +547,38 @@ export function useChat(options: Options = {}) {
     return null
   }, [activeId, conversations, defaultModel, errors, retry, runStream, streamingId])
 
+  /**
+   * « Dupliquer à partir d'ici » : nouvelle conversation avec les messages jusqu'à celui-ci (inclus),
+   * même projet, dossier et modèle. L'originale ne bouge pas. Renvoie l'id de la copie.
+   */
+  const duplicateFrom = useCallback(
+    (convId: string, messageId: string): string | null => {
+      const source = conversations.find((c) => c.id === convId)
+      const index = source?.messages.findIndex((m) => m.id === messageId) ?? -1
+      if (!source || index < 0) return null
+      const now = Date.now()
+      const copy: Conversation = {
+        id: newId(),
+        title: `${source.title} (copie)`.slice(0, 100),
+        // Titre gardé tel quel : pas de nouveau titre automatique sur la copie.
+        titleSource: source.titleSource === 'provisional' ? 'provisional' : 'user',
+        ...(source.model && { model: source.model }),
+        ...(source.projectId && { projectId: source.projectId }),
+        ...(source.folder && { folder: source.folder }),
+        // Nouveaux ids : une réponse gardée dans le cerveau reste liée à l'originale.
+        messages: source.messages.slice(0, index + 1).map((m) => ({ ...m, id: newId() })),
+        createdAt: now,
+        updatedAt: now,
+      }
+      setConversations((prev) => [copy, ...prev])
+      setActiveId(copy.id)
+      setPendingProjectId(null)
+      setPendingFolder(null)
+      return copy.id
+    },
+    [conversations],
+  )
+
   /** Choisir un modèle : il s'applique à la conversation ouverte ET devient le défaut des nouvelles. */
   const setModel = useCallback(
     (model: string) => {
@@ -647,6 +679,7 @@ export function useChat(options: Options = {}) {
     stop,
     retry,
     regenerate,
+    duplicateFrom,
     newConversation,
     selectConversation,
     moveConversation,

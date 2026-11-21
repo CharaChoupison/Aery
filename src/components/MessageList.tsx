@@ -20,12 +20,16 @@ interface Props {
   savedIds?: Set<string>
   /** « Garder dans le cerveau » sous une réponse. */
   onSave?: (messageId: string, answer: string) => void
+  /** Refaire la dernière réponse (bouton sous la dernière réponse seulement). */
+  onRegenerate?: () => void
+  /** Nouvelle conversation qui s'arrête à ce message. */
+  onDuplicate?: (messageId: string) => void
 }
 
 /** Distance (en px) en dessous de laquelle on considère qu'on est « en bas ». */
 const STICK_THRESHOLD = 80
 
-export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave }: Props) {
+export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave, onRegenerate, onDuplicate }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // useRef et pas useState : on n'a pas besoin de re-render quand ça change.
   const atBottomRef = useRef(true)
@@ -109,6 +113,9 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
                   isLast={m.id === lastId}
                   saved={savedIds?.has(m.id)}
                   onSave={onSave && ((answer) => onSave(m.id, answer))}
+                  // Réessayer seulement la dernière : refaire une ancienne effacerait la suite (pas de branches).
+                  onRetry={m.id === lastId && !isStreaming && !error ? onRegenerate : undefined}
+                  onDuplicate={onDuplicate && (() => onDuplicate(m.id))}
                 />
               </Appear>
             ),
