@@ -548,6 +548,30 @@ export function useChat(options: Options = {}) {
   }, [activeId, conversations, defaultModel, errors, retry, runStream, streamingId])
 
   /**
+   * Modifier un de ses messages : le texte est remplacé, tout ce qui suivait est retiré, puis une
+   * nouvelle réponse est demandée. Si elle échoue, la conversation d'avant revient. Renvoie une erreur, ou null.
+   */
+  const editMessage = useCallback(
+    (convId: string, messageId: string, text: string): string | null => {
+      if (streamingId) return 'Attends la fin de la réponse en cours.'
+      const conv = conversations.find((c) => c.id === convId)
+      const index = conv?.messages.findIndex((m) => m.id === messageId) ?? -1
+      if (!conv || index < 0 || conv.messages[index].role !== 'user') return 'Message introuvable.'
+      const original = conv.messages[index]
+      const content = text.trim()
+      if (!content && !original.attachments?.length) return 'Le message est vide.'
+      setError(convId, null)
+      void runStream(conv.id, [...conv.messages.slice(0, index), { ...original, id: newId(), content }], conv.model ?? defaultModel, {
+        projectId: conv.projectId,
+        folder: conv.folder,
+        fallback: conv.messages,
+      })
+      return null
+    },
+    [conversations, defaultModel, runStream, setError, streamingId],
+  )
+
+  /**
    * « Dupliquer à partir d'ici » : nouvelle conversation avec les messages jusqu'à celui-ci (inclus),
    * même projet, dossier et modèle. L'originale ne bouge pas. Renvoie l'id de la copie.
    */
@@ -680,6 +704,7 @@ export function useChat(options: Options = {}) {
     retry,
     regenerate,
     duplicateFrom,
+    editMessage,
     newConversation,
     selectConversation,
     moveConversation,

@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { Button } from '@/components/ui/button'
 import { AssistantMessage } from '@/components/AssistantMessage'
+import { UserMessage } from '@/components/UserMessage'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import type { ChatError, UiMessage } from '@/hooks/useChat'
@@ -24,12 +25,14 @@ interface Props {
   onRegenerate?: () => void
   /** Nouvelle conversation qui s'arrête à ce message. */
   onDuplicate?: (messageId: string) => void
+  /** Modifier un de ses messages (renvoie une erreur, ou null). */
+  onEdit?: (messageId: string, text: string) => string | null
 }
 
 /** Distance (en px) en dessous de laquelle on considère qu'on est « en bas ». */
 const STICK_THRESHOLD = 80
 
-export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave, onRegenerate, onDuplicate }: Props) {
+export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave, onRegenerate, onDuplicate, onEdit }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // useRef et pas useState : on n'a pas besoin de re-render quand ça change.
   const atBottomRef = useRef(true)
@@ -89,21 +92,21 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
           eux, restent sélectionnables (select-text). */}
       <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto select-none">
         <div ref={listRef} className={cn('mx-auto flex flex-col gap-6 px-4 py-6', widthClass)}>
-          {messages.map((m) =>
+          {messages.map((m, i) =>
             m.role === 'user' ? (
               // Message envoyé : il « monte » depuis la zone de saisie, avec un léger rebond.
               <Appear
                 key={m.id}
                 enabled={!initialIds.has(m.id)}
                 from={{ autoAlpha: 0, y: 24, scale: 0.96, transformOrigin: '100% 100%', ease: 'back.out(1.6)' }}
-                className="flex max-w-[85%] flex-col items-end gap-2 self-end"
+                className="group flex max-w-[85%] min-w-0 flex-col items-end gap-2 self-end has-[textarea]:w-full"
               >
                 {m.attachments && m.attachments.length > 0 && <UserAttachments message={m} />}
-                {m.content && (
-                  // wrap-anywhere (et pas break-words) : une longue URL sans espace peut être coupée
-                  // n'importe où, sinon la bulle s'élargit à toute l'URL et déborde à gauche.
-                  <div className="max-w-full whitespace-pre-wrap wrap-anywhere rounded-3xl bg-muted px-4 py-2.5 select-text">{m.content}</div>
-                )}
+                <UserMessage
+                  message={m}
+                  hasLater={i < messages.length - 2}
+                  onEdit={onEdit && !isStreaming ? (text) => onEdit(m.id, text) : undefined}
+                />
               </Appear>
             ) : (
               <Appear key={m.id} enabled={!initialIds.has(m.id)} from={{ autoAlpha: 0, y: 10, delay: 0.1 }} className="select-text">

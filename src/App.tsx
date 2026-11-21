@@ -528,6 +528,7 @@ export default function App() {
                 onSave={saveReply}
                 onRegenerate={isStreaming ? undefined : () => void chat.regenerate()}
                 onDuplicate={(messageId) => chat.duplicateFrom(active.id, messageId)}
+                onEdit={(messageId, text) => chat.editMessage(active.id, messageId, text)}
               />
               <div className={cn('mx-auto w-full px-4 pb-4', widthClass)}>
                 {composer}
