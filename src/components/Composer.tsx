@@ -1,7 +1,8 @@
-import { ArrowUp, Bot, Brain, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
+import { ArrowUp, Bot, Brain, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Mic, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Appear } from '@/components/Appear'
+import { DictationControls, DictationNotices } from '@/components/DictationControls'
 import { IconButton } from '@/components/IconButton'
 import { SlashMenu } from '@/components/SlashMenu'
 import {
@@ -26,6 +27,8 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { useDictation } from '@/hooks/useDictation'
+import { CAN_DICTATE, spliceDictation, type DictationBase } from '@/lib/dictation'
 import { setPreferences, usePreferences } from '@/lib/preferences'
 import { IS_TAURI } from '@/lib/transport'
 import { cn } from '@/lib/utils'
@@ -82,6 +85,39 @@ export function Composer({
   const formRef = useRef<HTMLFormElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const motion = useMotion()
+
+  // --- Dictée (appli seulement) : le texte s'écrit en direct là où était le curseur ---------
+  // On retient le champ tel qu'il était au début : chaque texte reçu (provisoire puis final)
+  // remplace le précédent à cet endroit, et un texte vide (Annuler) remet le champ comme avant.
+  const baseRef = useRef<DictationBase | null>(null)
+  const cursorRef = useRef<number | null>(null) // où remettre le curseur à la fin
+  const dictation = useDictation((text) => {
+    if (!baseRef.current) return
+    const { value: next, cursor } = spliceDictation(baseRef.current, text)
+    cursorRef.current = cursor
+    setValue(next)
+  })
+  const dictating = dictation.phase !== 'idle'
+
+  function startDictation() {
+    const el = ref.current
+    baseRef.current = { text: value, start: el?.selectionStart ?? value.length, end: el?.selectionEnd ?? value.length }
+    void dictation.start()
+  }
+
+  // Pendant la dictée, le champ suit le texte qui s'écrit (défile jusqu'en bas).
+  useEffect(() => {
+    if (dictating && ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [value, dictating])
+
+  // Fin de la dictée : le champ revient, avec le curseur juste après le texte dicté.
+  useEffect(() => {
+    if (dictation.phase !== 'idle' || cursorRef.current === null) return
+    const pos = cursorRef.current
+    cursorRef.current = null
+    ref.current?.focus()
+    ref.current?.setSelectionRange(pos, pos)
+  }, [dictation.phase])
 
   // --- Commandes slash ---------------------------------------------------------------
   const menuId = useId()
@@ -271,6 +307,7 @@ export function Composer({
   function submit() {
     // Commande connue (« /new », « /model auto »…) : exécutée, même pendant une réponse
     // (c'est la commande qui dit si elle peut attendre). Inconnue : envoyée comme un message.
+    if (dictating) return
     const command = parsed && commands.find((c) => c.name === parsed.name)
     if (command) return runCommand(command, parsed.arg)
     if (!canSend || isStreaming) return
@@ -282,6 +319,7 @@ export function Composer({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (dictating) return // Entrée / Échap gérés par la dictée (voir plus haut)
     if (menuOpen && !e.nativeEvent.isComposing) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         if (menuItems.length) {
@@ -368,6 +406,7 @@ export function Composer({
           </ul>
         )}
 
+        {/* Pendant la dictée, le champ reste visible (le texte s'y écrit en direct) mais en lecture seule. */}
         <div className="flex items-end gap-1">
           <input
             ref={fileRef}
@@ -388,6 +427,7 @@ export function Composer({
                   type="button"
                   variant="ghost"
                   size="icon-lg"
+                  disabled={dictating}
                   aria-label="Ajouter des fichiers, options"
                   title="Ajouter des fichiers, options"
                   className="rounded-full text-muted-foreground data-[popup-open]:bg-muted"
@@ -443,6 +483,7 @@ export function Composer({
             ref={ref}
             value={value}
             onChange={(e) => changeValue(e.target.value)}
+            readOnly={dictating}
             onKeyDown={handleKeyDown}
             onBlur={() => setMenuClosed(true)}
             onFocus={() => setMenuClosed(false)}
@@ -455,7 +496,7 @@ export function Composer({
               }
             }}
             rows={1}
-            placeholder={placeholder ?? (agent ? 'Demande quelque chose à l’agent…' : commands.length ? 'Écris ton message, ou / pour les commandes…' : 'Écris ton message…')}
+            placeholder={dictating ? 'Parle, le texte s’écrit ici…' : placeholder ?? (agent ? 'Demande quelque chose à l’agent…' : commands.length ? 'Écris ton message, ou / pour les commandes…' : 'Écris ton message…')}
             aria-label="Message"
             {...(commands.length > 0 && {
               role: 'combobox',
@@ -466,7 +507,19 @@ export function Composer({
             })}
             className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-none placeholder:text-muted-foreground"
           />
-          {isStreaming ? (
+          {CAN_DICTATE && !dictating && (
+            <IconButton
+              label="Dicter (transcrit sur ton Mac)"
+              side="top"
+              type="button"
+              onClick={startDictation}
+              size="icon-lg"
+              className="rounded-full text-muted-foreground"
+            >
+              <Mic className="size-5" aria-hidden />
+            </IconButton>
+          )}
+          {dictating ? null : isStreaming ? (
             <IconButton label="Arrêter la réponse" side="top" type="button" onClick={onStop} variant="default" size="icon-lg" className="rounded-full">
               <Square className="size-3.5 fill-current" aria-hidden />
             </IconButton>
@@ -484,6 +537,7 @@ export function Composer({
             </IconButton>
           )}
         </div>
+        {dictating && <DictationControls dictation={dictation} className="mt-1 border-t pt-2" />}
       </form>
 
       {/* Voile affiché pendant qu'on fait glisser des fichiers au-dessus de la fenêtre. */}
@@ -510,6 +564,7 @@ export function Composer({
           {commandError}
         </p>
       )}
+      <DictationNotices dictation={dictation} className="px-3" />
       {fileError && (
         <p role="alert" className="flex items-center gap-1.5 px-3 text-xs text-destructive">
           <CircleAlert className="size-3.5 shrink-0" aria-hidden />

@@ -15,6 +15,16 @@ export type ThemePreference = 'system' | 'light' | 'dark'
 export type MotionPreference = 'system' | 'on' | 'off'
 export type ChatWidth = 'narrow' | 'wide'
 
+/** Dictée (appli seulement) : modèle Whisper préféré et langue parlée (« auto » = Whisper devine). */
+export const DICTATION_MODELS = ['small', 'turbo'] as const
+export type DictationModelId = (typeof DICTATION_MODELS)[number]
+export const DICTATION_LANGUAGES = ['auto', 'fr', 'en', 'es', 'de', 'it', 'pt', 'nl'] as const
+export type DictationLanguage = (typeof DICTATION_LANGUAGES)[number]
+export interface DictationPreferences {
+  model: DictationModelId
+  language: DictationLanguage
+}
+
 /** Plus / moins qu'à l'ordinaire (chaleur, enthousiasme, émojis, titres et listes). */
 export type Level = 'default' | 'more' | 'less'
 export type BaseStyle = 'default' | 'efficient' | 'detailed' | 'teacher' | 'casual' | 'professional'
@@ -66,6 +76,8 @@ export interface Preferences {
   commands: CustomCommand[]
   /** Rangement automatique du second cerveau (jour, heure, activé). */
   brainTidy: TidySchedule
+  /** Dictée vocale locale (bouton micro du champ de saisie, appli seulement). */
+  dictation: DictationPreferences
 }
 
 /** Bornes des réglages : les mêmes que le Playground de FreeLLMAPI. */
@@ -105,6 +117,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   brain: true,
   commands: [],
   brainTidy: DEFAULT_TIDY_SCHEDULE,
+  dictation: { model: 'turbo', language: 'fr' },
 }
 
 const STORAGE_KEY = 'freellm-chat:preferences'
@@ -172,7 +185,14 @@ function sanitize(raw: unknown): Preferences {
     brain: typeof r.brain === 'boolean' ? r.brain : d.brain,
     commands: sanitizeCustomCommands(r.commands),
     brainTidy: readTidy(r.brainTidy),
+    dictation: readDictation(r.dictation),
   }
+}
+
+function readDictation(raw: unknown): DictationPreferences {
+  const d = DEFAULT_PREFERENCES.dictation
+  const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  return { model: oneOf(r.model, DICTATION_MODELS, d.model), language: oneOf(r.language, DICTATION_LANGUAGES, d.language) }
 }
 
 function readTidy(raw: unknown): TidySchedule {

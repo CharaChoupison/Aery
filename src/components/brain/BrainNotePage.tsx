@@ -16,6 +16,7 @@ import {
   ListChecks,
   LoaderCircle,
   MessageSquare,
+  Mic,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -28,6 +29,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
+import { DictationControls, DictationNotices } from '@/components/DictationControls'
 import { BRAIN_KIND_ICONS } from '@/components/brain/kinds'
 import { BrainHistoryDialog } from '@/components/brain/BrainHistoryDialog'
 import { NoteAiBar, type NoteRange } from '@/components/brain/NoteAiBar'
@@ -52,6 +54,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { projectRoomError, type Brain } from '@/hooks/useBrain'
+import { useDictation } from '@/hooks/useDictation'
 import {
   allFolders,
   BRAIN_KIND_LABELS,
@@ -65,6 +68,7 @@ import {
   sanitizeFolder,
   type BrainItem,
 } from '@/lib/brain'
+import { CAN_DICTATE, spliceDictation, type DictationBase } from '@/lib/dictation'
 import type { Project } from '@/lib/projects'
 import { cn } from '@/lib/utils'
 
@@ -137,6 +141,7 @@ export function BrainNotePage({
   const contentRef = useRef<HTMLTextAreaElement>(null)
   /** On a cliqué dans le texte : sa sélection / son curseur comptent pour la barre IA. */
   const contentTouched = useRef(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const Icon = BRAIN_KIND_ICONS[item.kind]
 
   // --- Enregistrement automatique -------------------------------------------------------
@@ -203,6 +208,54 @@ export function BrainNotePage({
       area.setSelectionRange(caret, caret)
     })
   }
+
+  // --- Dictée (appli seulement) : le texte s'écrit en direct dans la note -------------------
+  // Au curseur si on a cliqué dans le texte, sinon dans un nouveau paragraphe à la fin.
+  // Chaque texte reçu remplace le précédent ; Annuler remet la note comme avant.
+  const dictationBase = useRef<(DictationBase & { paragraph: boolean }) | null>(null)
+  const dictationCaret = useRef<number | null>(null)
+  const dictation = useDictation((text) => {
+    const base = dictationBase.current
+    if (!base) return
+    const { value, cursor } = spliceDictation(base, text && base.paragraph ? `\n\n${text}` : text)
+    dictationCaret.current = Math.min(cursor, BRAIN_LIMITS.content)
+    change({ content: value.slice(0, BRAIN_LIMITS.content) })
+  })
+  const dictating = dictation.phase !== 'idle'
+
+  function startDictation() {
+    const el = contentRef.current
+    const content = draft.content
+    const atCaret = editing && el !== null && contentTouched.current
+    const start = atCaret ? el.selectionStart : content.length
+    const end = atCaret ? el.selectionEnd : content.length
+    const paragraph = !atCaret && content.trim() !== '' && !content.endsWith('\n')
+    dictationBase.current = { text: content, start, end, paragraph }
+    flush() // ce qui a été tapé avant est enregistré tel quel
+    setEditing(true)
+    void dictation.start()
+  }
+
+  // Dictée à la fin de la note : la page suit le texte qui s'écrit.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    const base = dictationBase.current
+    if (dictating && scroller && base && base.start === base.text.length) scroller.scrollTop = scroller.scrollHeight
+  }, [draft.content, dictating])
+
+  // Fin de la dictée : curseur juste après le texte dicté.
+  useEffect(() => {
+    if (dictation.phase !== 'idle' || dictationCaret.current === null) return
+    const caret = dictationCaret.current
+    dictationCaret.current = null
+    afterRender(() => {
+      const area = contentRef.current
+      if (!area) return
+      area.focus()
+      area.setSelectionRange(caret, caret)
+      contentTouched.current = true
+    })
+  }, [dictation.phase])
 
   function addTags(raw: string) {
     const tags = parseTags([...draft.tags, ...parseTags(raw)].join(','))
@@ -296,6 +349,19 @@ export function BrainNotePage({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {CAN_DICTATE && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full"
+            onClick={startDictation}
+            disabled={dictating}
+            aria-label="Dicter dans la note (transcrit sur ton Mac)"
+            title="Dicter dans la note (transcrit sur ton Mac)"
+          >
+            <Mic aria-hidden />
+          </Button>
+        )}
 
         <div className="ml-auto flex items-center gap-1">
           <span className="mr-1 flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
@@ -311,7 +377,7 @@ export function BrainNotePage({
               </>
             ) : null}
           </span>
-          <Button variant="ghost" size="sm" className="rounded-full" onClick={() => setEditing(!editing)} aria-pressed={editing}>
+          <Button variant="ghost" size="sm" className="rounded-full" onClick={() => setEditing(!editing)} aria-pressed={editing} disabled={dictating}>
             {editing ? <BookOpen aria-hidden /> : <Pencil aria-hidden />}
             {editing ? 'Lire' : 'Écrire'}
           </Button>
@@ -346,7 +412,7 @@ export function BrainNotePage({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <Appear from={{ autoAlpha: 0, y: 12, duration: 0.4 }} className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-10 pb-32 sm:px-12">
           <textarea
             ref={titleRef}
@@ -495,7 +561,7 @@ export function BrainNotePage({
 
           <hr className="my-6" />
 
-          {editing && empty && (
+          {editing && empty && !dictating && (
             <div className="mb-4 flex flex-wrap gap-2" aria-label="Modèles de page">
               {TEMPLATES.map((t) => (
                 <button
@@ -522,10 +588,11 @@ export function BrainNotePage({
               ref={contentRef}
               value={draft.content}
               onChange={(e) => change({ content: e.target.value.slice(0, BRAIN_LIMITS.content) })}
+              readOnly={dictating}
               onBlur={flush}
               onFocus={() => (contentTouched.current = true)}
               autoFocus={Boolean(item.title) && empty}
-              placeholder="Écris ici, ou choisis un modèle. Markdown accepté, [[Titre]] pour lier une autre note."
+              placeholder={dictating ? 'Parle, le texte s’écrit ici…' : 'Écris ici, ou choisis un modèle. Markdown accepté, [[Titre]] pour lier une autre note.'}
               aria-label="Contenu"
               className="min-h-[40vh] w-full resize-none overflow-hidden bg-transparent text-base leading-7 outline-none placeholder:text-muted-foreground/60"
             />
@@ -548,6 +615,19 @@ export function BrainNotePage({
           )}
         </Appear>
       </div>
+
+      {/* Dictée : pastille flottante au-dessus de la barre IA (ondes, Annuler, Terminer), ou son message. */}
+      {CAN_DICTATE && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-center px-4">
+          {dictating ? (
+            <Appear from={{ autoAlpha: 0, y: 8, duration: 0.25 }} className="pointer-events-auto w-full max-w-md rounded-full border bg-background p-1.5 shadow-lg">
+              <DictationControls dictation={dictation} />
+            </Appear>
+          ) : (
+            <DictationNotices dictation={dictation} className="pointer-events-auto max-w-xl rounded-2xl border bg-background px-4 py-2 shadow-sm" />
+          )}
+        </div>
+      )}
 
       <NoteAiBar title={draft.title} content={draft.content} model={model} getRange={getRange} onApply={applyAi} />
 

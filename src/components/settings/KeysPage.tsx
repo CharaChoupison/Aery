@@ -25,6 +25,7 @@ import {
   ComboboxTrigger,
 } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { useAdminData } from '@/hooks/useAdminData'
 import { addKey, deleteKey, formatCompact, formatNumber, getKeys, getProviders, type Provider, type ProviderKey } from '@/lib/admin'
 import { ApiError, listSearchEngines, type SearchEngine } from '@/lib/api'
@@ -147,11 +148,18 @@ export function KeysPage({ onChanged }: { onChanged: () => void }) {
         })}
         {keylessCount > 0 && (
           <p className="pt-3 text-xs text-muted-foreground">
-            + {keylessCount} fournisseur{keylessCount > 1 ? 's' : ''} utilisé{keylessCount > 1 ? 's' : ''} sans clé (accès anonyme).
+            + {keylessCount} fournisseur{keylessCount > 1 ? 's' : ''} utilisé{keylessCount > 1 ? 's' : ''} sans clé (voir ci-dessous).
           </p>
         )}
         {engines.data && <SearchSummary engines={engines.data} />}
       </Group>
+
+      <KeylessGroup
+        providers={providers.data ?? []}
+        keys={keys.data ?? []}
+        engines={engines.data ?? null}
+        onChanged={() => (reload(), onChanged())}
+      />
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <AlertDialogContent>
@@ -171,6 +179,137 @@ export function KeysPage({ onChanged }: { onChanged: () => void }) {
         </AlertDialogContent>
       </AlertDialog>
     </>
+  )
+}
+
+// --- Fournisseurs sans clé -------------------------------------------------------------
+
+/** Fournisseurs très lents : prévenir, car `auto` peut tomber dessus. */
+const SLOW_PLATFORMS = /horde/i
+
+/**
+ * Fournisseurs qui marchent sans compte (accès anonyme, limites plus serrées).
+ * Pour les activer, FreeLLMAPI enregistre une « clé » anonyme (POST keys sans `key`) ;
+ * pour les couper, on supprime cette clé anonyme. Une vraie clé ajoutée en plus n'est jamais touchée.
+ */
+function KeylessGroup({
+  providers,
+  keys,
+  engines,
+  onChanged,
+}: {
+  providers: Provider[]
+  keys: ProviderKey[]
+  engines: SearchEngine[] | null
+  onChanged: () => void
+}) {
+  const [busy, setBusy] = useState<Set<string>>(() => new Set())
+  const [error, setError] = useState<string | null>(null)
+
+  const activeSearch = engines ? new Set(engines.map((e) => e.provider)) : null
+  const list = providers
+    .filter((p) => p.keyless)
+    .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, 'fr') : a.kind === 'chat' ? -1 : 1))
+  if (list.length === 0) return null
+
+  const anonKeys = (platform: string) => keys.filter((k) => k.platform === platform && k.keyless)
+  const inactive = (p: Provider) => p.kind === 'search' && activeSearch !== null && !activeSearch.has(p.platform)
+  const toActivate = list.filter((p) => anonKeys(p.platform).length === 0 && !inactive(p))
+
+  const mark = (platform: string, on: boolean) =>
+    setBusy((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(platform)
+      else next.delete(platform)
+      return next
+    })
+
+  async function toggle(p: Provider, on: boolean) {
+    setError(null)
+    mark(p.platform, true)
+    try {
+      if (on) await addKey({ platform: p.platform, key: '' })
+      else for (const k of anonKeys(p.platform)) await deleteKey(k.id)
+      onChanged()
+    } catch (e) {
+      setError(`${p.name} : ${e instanceof ApiError ? e.message : on ? 'activation impossible.' : 'impossible de le retirer.'}`)
+    } finally {
+      mark(p.platform, false)
+    }
+  }
+
+  async function activateAll() {
+    setError(null)
+    // L'un après l'autre : FreeLLMAPI écrit dans une seule base, inutile de le bousculer.
+    for (const p of toActivate) {
+      mark(p.platform, true)
+      try {
+        await addKey({ platform: p.platform, key: '' })
+      } catch (e) {
+        setError(`${p.name} : ${e instanceof ApiError ? e.message : 'activation impossible.'}`)
+      } finally {
+        mark(p.platform, false)
+      }
+    }
+    onChanged()
+  }
+
+  return (
+    <Group
+      title="Sans clé"
+      description="Ces services marchent sans compte, en accès anonyme. C’est gratuit, mais les limites sont plus serrées : idéal en renfort de tes clés."
+      action={
+        toActivate.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => void activateAll()} disabled={busy.size > 0}>
+            <Plus aria-hidden />
+            Tout activer
+          </Button>
+        )
+      }
+    >
+      {error && (
+        <Notice tone="error" icon={CircleAlert}>
+          {error}
+        </Notice>
+      )}
+      {list.map((p) => {
+        const anon = anonKeys(p.platform)
+        const on = anon.length > 0
+        const hasOwnKey = keys.some((k) => k.platform === p.platform && !k.keyless)
+        const status = on ? (STATUS[anon[0].status] ?? { label: anon[0].status }) : null
+        const notes = [
+          p.kind === 'search' && 'Recherche web',
+          SLOW_PLATFORMS.test(p.platform) && 'Très lent : peut rallonger les réponses en mode auto',
+          inactive(p) && 'Pas de moteur actif chez FreeLLMAPI : il ne servirait pas',
+          hasOwnKey && 'Ta clé est aussi utilisée',
+          on && anon[0].lastHealthError && anon[0].status !== 'healthy' && anon[0].lastHealthError,
+        ].filter(Boolean)
+        return (
+          <Row
+            key={p.platform}
+            label={
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{p.name}</span>
+                {status && <Badge className={status.className}>{status.label}</Badge>}
+                {on && !anon[0].enabled && <Badge>Désactivé</Badge>}
+              </span>
+            }
+            description={notes.length > 0 ? notes.join(' · ') : undefined}
+            control={
+              <span className="flex items-center gap-2">
+                {busy.has(p.platform) && <LoaderCircle className="size-4 animate-spin text-muted-foreground" aria-hidden />}
+                <Switch
+                  checked={on}
+                  disabled={busy.has(p.platform) || (!on && inactive(p))}
+                  onCheckedChange={(checked) => void toggle(p, checked)}
+                  aria-label={`${on ? 'Désactiver' : 'Activer'} ${p.name} sans clé`}
+                />
+              </span>
+            }
+          />
+        )
+      })}
+    </Group>
   )
 }
 

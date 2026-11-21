@@ -10,6 +10,7 @@ import {
   Info,
   KeyRound,
   LoaderCircle,
+  Mic,
   Monitor,
   Moon,
   PlugZap,
@@ -27,6 +28,7 @@ import {
 import { useEffect, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { CommandsPage } from '@/components/settings/CommandsPage'
+import { DictationPage } from '@/components/settings/DictationPage'
 import { KeysPage } from '@/components/settings/KeysPage'
 import { Group, Notice, Row, SelectControl } from '@/components/settings/layout'
 import { ProfilePage } from '@/components/settings/ProfilePage'
@@ -56,7 +58,7 @@ import { IS_TAURI } from '@/lib/transport'
 import { CAN_UPDATE, checkForUpdates, startUpdate, useUpdates } from '@/lib/updates'
 import { cn } from '@/lib/utils'
 
-export type SettingsTab = 'general' | 'profile' | 'model' | 'commands' | 'connection' | 'models' | 'keys' | 'usage' | 'analytics' | 'updates'
+export type SettingsTab = 'general' | 'profile' | 'model' | 'commands' | 'dictation' | 'connection' | 'models' | 'keys' | 'usage' | 'analytics' | 'updates'
 
 interface Props {
   open: boolean
@@ -99,6 +101,10 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; 
     group: 'Préférences',
     keywords: 'commandes slash raccourcis prompt modèle de message perso personnalisées',
   },
+  // Dictée : transcription par la partie Rust de l'appli (micro + Whisper).
+  ...(IS_TAURI
+    ? [{ id: 'dictation' as const, label: 'Dictée', icon: Mic, group: 'Préférences', keywords: 'dictée voix micro transcription whisper parler vocal langue' }]
+    : []),
   { id: 'connection', label: 'Connexion', icon: PlugZap, group: 'FreeLLMAPI', keywords: 'clé api port freellmapi tester' },
   {
     id: 'models',
@@ -203,6 +209,7 @@ export function SettingsDialog({ open, tab, onTabChange, settings, onClose, onSa
               {current.id === 'profile' && <ProfilePage />}
               {current.id === 'model' && <ModelPage />}
               {current.id === 'commands' && <CommandsPage />}
+              {current.id === 'dictation' && <DictationPage />}
               {/* Recréée à chaque ouverture : la clé tapée ne reste jamais en mémoire. */}
               {current.id === 'connection' && <ConnectionPage settings={settings} onSaved={onSaved} />}
               {current.id === 'models' && <ModelsPage onChanged={onModelsChanged} />}

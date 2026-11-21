@@ -5,9 +5,11 @@
 //!  - launcher : lance FreeLLMAPI en arrière-plan si elle n'est pas ouverte ;
 //!  - updates  : mise à jour de l'appli depuis le repo git du projet ;
 //!  - workspace : dossiers de travail de l'agent (lecture seule : lister, lire, chercher) ;
-//!  - vault    : export du second cerveau en dossier Markdown (coffre Obsidian).
+//!  - vault    : export du second cerveau en dossier Markdown (coffre Obsidian) ;
+//!  - dictation : dictée vocale transcrite sur le Mac (micro + Whisper, rien n'est envoyé).
 
 mod admin;
+mod dictation;
 mod launcher;
 mod proxy;
 mod settings;
@@ -23,7 +25,10 @@ pub fn run() {
         .manage(proxy::Requests::default())
         .manage(admin::DashboardSession::default())
         .manage(workspace::Workspaces::default())
+        .manage(dictation::Dictation::default())
         .setup(|app| {
+            // whisper.cpp écrit beaucoup dans la console : on le fait taire (journaux redirigés vers `log`, sans sortie).
+            whisper_rs::install_logging_hooks();
             // Dès l'ouverture, pour que FreeLLMAPI soit prête avant le premier message.
             let port = settings::read_port(app.handle());
             tauri::async_runtime::spawn(launcher::ensure_running(port));
@@ -43,6 +48,13 @@ pub fn run() {
             vault::pick_vault,
             vault::forget_vault,
             vault::export_vault,
+            dictation::dictation_status,
+            dictation::download_dictation_model,
+            dictation::cancel_dictation_download,
+            dictation::delete_dictation_model,
+            dictation::start_dictation,
+            dictation::stop_dictation,
+            dictation::cancel_dictation,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'appli");

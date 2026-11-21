@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Fusionné par Tauri dans l'Info.plist de l'appli. Sans cette phrase, macOS bloque le micro. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aery utilise le micro pour la dictée. Le son est transcrit sur ton Mac et n’est jamais envoyé sur Internet.</string>
+</dict>
+</plist>

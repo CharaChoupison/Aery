@@ -76,6 +76,18 @@ export default function App() {
     setSettingsOpen(true)
   }
 
+  // Demandes d'ouverture venues d'ailleurs (ex. « Ouvrir Paramètres › Dictée » sous le champ de saisie).
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      if ((e as CustomEvent).detail === 'dictation') {
+        setSettingsTab('dictation')
+        setSettingsOpen(true)
+      }
+    }
+    window.addEventListener('aery:open-settings', onOpen)
+    return () => window.removeEventListener('aery:open-settings', onOpen)
+  }, [])
+
   // Incrémenté quand des modèles sont activés / désactivés ou des clés ajoutées (Paramètres).
   const [modelsVersion, setModelsVersion] = useState(0)
   const { isVisionModel, isToolModel } = useModelCapabilities(settings?.hasKey ?? false, modelsVersion)
