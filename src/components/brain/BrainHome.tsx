@@ -2,6 +2,7 @@ import { Brain, Folder, Plus, Search, Sparkles, Upload, X } from 'lucide-react'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
 import { BRAIN_KIND_ICONS } from '@/components/brain/kinds'
+import { BrainGraphView } from '@/components/brain/BrainGraph'
 import { BrainTidyPanel } from '@/components/brain/BrainTidyPanel'
 import type { BrainTidy } from '@/hooks/useBrainTidy'
 import { ProjectSources } from '@/components/ProjectSources'
@@ -110,6 +111,7 @@ export function BrainHome({
               <TabsTrigger value="mine">
                 Mes notes <span className="text-xs text-muted-foreground tabular-nums">{items.length}</span>
               </TabsTrigger>
+              <TabsTrigger value="graph">Graphe</TabsTrigger>
               <TabsTrigger value="captured">Capturé</TabsTrigger>
               <TabsTrigger value="tidy">
                 Rangement
@@ -212,6 +214,10 @@ export function BrainHome({
                 ))}
               </ul>
             )}
+          </TabsContent>
+
+          <TabsContent value="graph">
+            <BrainGraphView items={items} onOpen={onOpen} />
           </TabsContent>
 
           <TabsContent value="captured">
