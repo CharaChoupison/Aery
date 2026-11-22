@@ -163,3 +163,72 @@ export function loadTidyRuns(limit = 30): Promise<TidyRun[]> {
 export function saveTidyRun(run: TidyRun): Promise<string> {
   return db.tidyRuns.put(run)
 }
+
+// --- Sauvegarde (export / import, voir src/lib/backup.ts) ---------------------------------
+
+export interface BackupTables {
+  conversations: Conversation[]
+  projects: Project[]
+  brain: BrainItem[]
+  brainVersions: BrainVersion[]
+  tidyRuns: TidyRun[]
+}
+
+/** Tout le contenu de la base, lu dans une seule transaction (photo cohérente). */
+export function readAllTables(): Promise<BackupTables> {
+  return db.transaction('r', [db.conversations, db.projects, db.brain, db.brainVersions, db.tidyRuns], async () => ({
+    conversations: await db.conversations.toArray(),
+    projects: await db.projects.toArray(),
+    brain: await db.brain.toArray(),
+    brainVersions: await db.brainVersions.toArray(),
+    tidyRuns: await db.tidyRuns.toArray(),
+  }))
+}
+
+export interface MergeCount {
+  added: number
+  updated: number
+  kept: number
+}
+
+/**
+ * Fusionne une sauvegarde dans la base, sans jamais rien supprimer :
+ *  - un élément absent est ajouté ;
+ *  - un élément présent n'est remplacé que si la sauvegarde en a une version PLUS RÉCENTE
+ *    (`updatedAt`), sinon on garde celui d'ici ;
+ *  - versions et rangements ne changent jamais une fois écrits : ajoutés seulement s'ils manquent.
+ * Tout ou rien : si une écriture échoue, la base reste comme avant.
+ */
+export function mergeTables(incoming: BackupTables): Promise<Record<keyof BackupTables, MergeCount>> {
+  return db.transaction('rw', [db.conversations, db.projects, db.brain, db.brainVersions, db.tidyRuns], async () => {
+    async function merge<T extends { id: string }>(
+      table: EntityTable<T, 'id'>,
+      rows: T[],
+      isNewer: (row: T, local: T) => boolean,
+    ): Promise<MergeCount> {
+      // Dexie a du mal avec un type générique « T » : on passe par une table « { id } » simple.
+      const plain = table as unknown as EntityTable<{ id: string }, 'id'>
+      const locals = (await plain.bulkGet(rows.map((r) => r.id))) as (T | undefined)[]
+      const toWrite: T[] = []
+      const count: MergeCount = { added: 0, updated: 0, kept: 0 }
+      rows.forEach((row, i) => {
+        const local = locals[i]
+        if (!local) count.added++
+        else if (isNewer(row, local)) count.updated++
+        else return void count.kept++
+        toWrite.push(row)
+      })
+      await plain.bulkPut(toWrite)
+      return count
+    }
+    const newer = <T extends { updatedAt: number }>(row: T, local: T) => row.updatedAt > local.updatedAt
+    const never = () => false
+    return {
+      conversations: await merge(db.conversations, incoming.conversations, newer),
+      projects: await merge(db.projects, incoming.projects, newer),
+      brain: await merge(db.brain, incoming.brain, newer),
+      brainVersions: await merge(db.brainVersions, incoming.brainVersions, never),
+      tidyRuns: await merge(db.tidyRuns, incoming.tidyRuns, never),
+    }
+  })
+}

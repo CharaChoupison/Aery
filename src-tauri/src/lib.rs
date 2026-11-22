@@ -6,9 +6,11 @@
 //!  - updates  : mise à jour de l'appli depuis le repo git du projet ;
 //!  - workspace : dossiers de travail de l'agent (lecture seule : lister, lire, chercher) ;
 //!  - vault    : export du second cerveau en dossier Markdown (coffre Obsidian) ;
-//!  - dictation : dictée vocale transcrite sur le Mac (micro + Whisper, rien n'est envoyé).
+//!  - dictation : dictée vocale transcrite sur le Mac (micro + Whisper, rien n'est envoyé) ;
+//!  - backup   : enregistre la sauvegarde d'Aery là où l'utilisateur l'a choisi.
 
 mod admin;
+mod backup;
 mod dictation;
 mod launcher;
 mod proxy;
@@ -55,6 +57,7 @@ pub fn run() {
             dictation::start_dictation,
             dictation::stop_dictation,
             dictation::cancel_dictation,
+            backup::save_backup,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'appli");

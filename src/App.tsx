@@ -3,6 +3,7 @@ import { AeryLogo } from '@/components/AeryLogo'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
 import { Composer } from '@/components/Composer'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { IconButton } from '@/components/IconButton'
 import { MessageList } from '@/components/MessageList'
 import { ModelPicker } from '@/components/ModelPicker'
@@ -467,6 +468,8 @@ export default function App() {
             </p>
           )}
 
+          {/* Filet de sécurité : une vue qui plante ne fait pas tomber la barre latérale. On retente en changeant d'endroit. */}
+          <ErrorBoundary resetKey={`${space}|${active?.id ?? ''}|${activeProject?.id ?? ''}|${noteId ?? ''}`}>
           {isEmpty && activeProject ? (
             // Accueil d'un projet : son nom, ses conversations, et une zone de saisie pour en commencer une.
             <ProjectHome
@@ -551,6 +554,7 @@ export default function App() {
               </div>
             </>
           )}
+          </ErrorBoundary>
         </div>
       </div>
 

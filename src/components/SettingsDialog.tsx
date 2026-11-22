@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Appear } from '@/components/Appear'
+import { BackupSection } from '@/components/settings/BackupSection'
 import { CommandsPage } from '@/components/settings/CommandsPage'
 import { DictationPage } from '@/components/settings/DictationPage'
 import { KeysPage } from '@/components/settings/KeysPage'
@@ -78,7 +79,7 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon; group: string; 
     label: 'Général',
     icon: SettingsIcon,
     group: 'Préférences',
-    keywords: 'apparence thème sombre clair système largeur conversation animations accessibilité mouvement titre',
+    keywords: 'apparence thème sombre clair système largeur conversation animations accessibilité mouvement titre sauvegarde exporter importer backup restaurer',
   },
   {
     id: 'profile',
@@ -315,6 +316,8 @@ function GeneralPage() {
           control={<Switch checked={prefs.autoTitle} onCheckedChange={(autoTitle) => setPreferences({ autoTitle })} aria-label="Titre automatique" />}
         />
       </Group>
+
+      <BackupSection />
     </>
   )
 }
