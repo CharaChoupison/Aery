@@ -21,6 +21,8 @@ export interface Settings {
   hasKey: boolean
   keyHint: string | null
   port: number
+  /** Appli : adresse du serveur Aery si tout passe par lui (la clé est alors sur le serveur). */
+  server?: string | null
 }
 
 export class ApiError extends Error {
@@ -109,12 +111,20 @@ export async function getSettings(): Promise<Settings> {
   return res.json()
 }
 
-/** apiKey: string = nouvelle clé, null = supprimer, undefined = ne pas toucher */
-export async function saveSettings(update: { apiKey?: string | null; port?: number }): Promise<Settings> {
+/**
+ * apiKey: string = nouvelle clé, null = supprimer, undefined = ne pas toucher.
+ * server (appli) : adresse du serveur Aery, '' = ne plus l'utiliser, undefined = ne pas toucher.
+ */
+export async function saveSettings(update: { apiKey?: string | null; port?: number; server?: string }): Promise<Settings> {
   if (IS_TAURI) {
     try {
       return await invokeCommand<Settings>('save_settings', {
-        update: { apiKey: update.apiKey ?? null, deleteKey: update.apiKey === null, port: update.port ?? null },
+        update: {
+          apiKey: update.apiKey ?? null,
+          deleteKey: update.apiKey === null,
+          port: update.port ?? null,
+          server: update.server ?? null,
+        },
       })
     } catch (e) {
       throw new ApiError(400, (e as Error).message)

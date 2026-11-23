@@ -582,5 +582,21 @@ export function createBackend(options: BackendOptions) {
     return true
   }
 
-  return { handle, isAllowedUser }
+  /**
+   * Mêmes verrous que pour nos routes (compte Tailscale + anti-CSRF), pour des routes gérées
+   * ailleurs (ex. /sync/* dans standalone.ts). Renvoie false si la requête a été refusée (réponse envoyée).
+   */
+  function guard(req: IncomingMessage, res: ServerResponse): boolean {
+    if (!isAllowedUser(req)) {
+      sendError(res, 403, 'forbidden_user', 'Accès refusé.')
+      return false
+    }
+    if (!isTrustedRequest(req)) {
+      sendError(res, 403, 'forbidden_origin', 'Origine non autorisée')
+      return false
+    }
+    return true
+  }
+
+  return { handle, guard, isAllowedUser }
 }

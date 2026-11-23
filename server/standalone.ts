@@ -27,6 +27,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import zlib from 'node:zlib'
 import { createBackend, sendError } from './backend.ts'
+import { createSync } from './sync.ts'
 
 function fail(message: string): never {
   console.error(`[aery] ${message}`)
@@ -75,6 +76,11 @@ const backend = createBackend({
   adminLogin: email && password ? { email, password } : undefined,
   allowedUsers,
 })
+
+// Synchro entre appareils : base SQLite à côté du fichier de config (dans /var/lib/aery sur le serveur).
+const sync = createSync(
+  path.resolve(process.env.AERY_SYNC_DB ?? path.join(path.dirname(path.resolve(process.env.AERY_CONFIG_FILE ?? path.join(import.meta.dirname, '..', 'data', 'config.json'))), 'sync.db')),
+)
 
 // ---------------------------------------------------------------------------
 // Fichiers de l'interface
@@ -224,6 +230,10 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): void 
 const server = http.createServer((req, res) => {
   setSecurityHeaders(res)
   if (backend.handle(req, res)) return
+  if ((req.url ?? '').startsWith('/sync/')) {
+    if (backend.guard(req, res)) sync.handle(req, res)
+    return
+  }
   if (!backend.isAllowedUser(req)) {
     sendError(res, 403, 'forbidden_user', 'Accès refusé.')
     return

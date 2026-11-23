@@ -1,4 +1,8 @@
-//! Réglages de l'appli : la clé FreeLLMAPI (dans le Trousseau macOS) et le port.
+//! Réglages de l'appli : la clé FreeLLMAPI (dans le Trousseau macOS), le port, et le serveur Aery.
+//!
+//! Serveur Aery (facultatif) : si une adresse est enregistrée (ex. https://pronoti.xxx.ts.net), TOUT passe
+//! par ce serveur (chat, statistiques, synchro) : c'est lui qui garde la clé et parle à FreeLLMAPI.
+//! Seules les adresses Tailscale en HTTPS sont acceptées (le serveur n'est joignable que via ton réseau privé).
 //!
 //! Même règle que la version web : l'interface peut ÉCRIRE la clé, mais ne peut jamais la RELIRE.
 //! Elle ne reçoit qu'un indice (« freellmapi-…ab12 »).
@@ -17,6 +21,8 @@ pub struct Settings {
     has_key: bool,
     key_hint: Option<String>,
     port: u16,
+    /// Adresse du serveur Aery, si l'appli passe par lui.
+    server: Option<String>,
 }
 
 impl Settings {
@@ -32,11 +38,15 @@ pub struct SettingsUpdate {
     #[serde(default)]
     delete_key: bool,
     port: Option<u16>,
+    /// Some("") = ne plus passer par un serveur ; Some(adresse) = l'utiliser ; None = ne pas toucher.
+    server: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 struct FileConfig {
     port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    server: Option<String>,
 }
 
 // --- Clé (Trousseau) -------------------------------------------------------------------
@@ -85,37 +95,78 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Dossier de configuration introuvable : {e}"))
 }
 
-pub fn read_port(app: &AppHandle) -> u16 {
+fn read_config(app: &AppHandle) -> FileConfig {
     config_path(app)
         .ok()
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<FileConfig>(&s).ok())
-        .and_then(|c| c.port)
-        .filter(|p| *p > 0)
-        .unwrap_or(DEFAULT_PORT)
+        .unwrap_or_default()
 }
 
-pub fn write_port(app: &AppHandle, port: u16) -> Result<(), String> {
+fn write_config(app: &AppHandle, config: &FileConfig) -> Result<(), String> {
     let path = config_path(app)?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     // Écriture atomique : fichier temporaire puis renommage.
     let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&FileConfig { port: Some(port) }).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     fs::write(&tmp, json).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+pub fn read_port(app: &AppHandle) -> u16 {
+    read_config(app).port.filter(|p| *p > 0).unwrap_or(DEFAULT_PORT)
+}
+
+pub fn write_port(app: &AppHandle, port: u16) -> Result<(), String> {
+    let mut config = read_config(app);
+    config.port = Some(port);
+    write_config(app, &config)
+}
+
+// --- Serveur Aery ------------------------------------------------------------------------
+
+/// « https://pronoti.tail31af72.ts.net/ » → « https://pronoti.tail31af72.ts.net », ou None si refusée :
+/// HTTPS obligatoire, adresse Tailscale (*.ts.net) seulement, sans identifiants, chemin, paramètres ni ancre.
+pub fn normalize_server(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw.trim()).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    let label_ok = |l: &str| !l.is_empty() && l.len() <= 63 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let ok = url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(url.path(), "" | "/")
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && host.ends_with(".ts.net")
+        && host.split('.').count() >= 4
+        && host.split('.').all(label_ok);
+    ok.then(|| match url.port() {
+        Some(port) => format!("https://{host}:{port}"),
+        None => format!("https://{host}"),
+    })
+}
+
+/// Serveur Aery enregistré (revalidé à chaque lecture).
+pub fn read_server(app: &AppHandle) -> Option<String> {
+    read_config(app).server.as_deref().and_then(normalize_server)
 }
 
 // --- Commandes appelées par l'interface ---------------------------------------------------
 
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
+    // Avec un serveur Aery, la clé est sur le serveur : rien à saisir ici.
+    if let Some(server) = read_server(&app) {
+        return Ok(Settings { has_key: true, key_hint: Some("sur le serveur".into()), port: read_port(&app), server: Some(server) });
+    }
     let key = read_key()?;
     Ok(Settings {
         has_key: key.is_some(),
         key_hint: key.as_deref().map(key_hint),
         port: read_port(&app),
+        server: None,
     })
 }
 
@@ -137,6 +188,18 @@ pub fn save_settings(app: AppHandle, update: SettingsUpdate) -> Result<Settings,
         write_port(&app, port)?;
     }
 
+    if let Some(server) = update.server {
+        let mut config = read_config(&app);
+        config.server = if server.trim().is_empty() {
+            None
+        } else {
+            Some(normalize_server(&server).ok_or(
+                "Adresse refusée : il faut l’adresse Tailscale de ton serveur en HTTPS (ex. https://serveur.xxxx.ts.net).",
+            )?)
+        };
+        write_config(&app, &config)?;
+    }
+
     get_settings(app)
 }
 
@@ -151,6 +214,22 @@ mod tests {
         assert!(!is_valid_key("freellmapi-abc def"));
         assert!(!is_valid_key("freellmapi-abc\r\nX-Evil: 1"));
         assert!(!is_valid_key("freellmapi-é-accent"));
+    }
+
+    #[test]
+    fn only_tailscale_https_servers_are_accepted() {
+        assert_eq!(normalize_server("https://pronoti.tail31af72.ts.net/").as_deref(), Some("https://pronoti.tail31af72.ts.net"));
+        assert_eq!(normalize_server(" https://Pronoti.Tail31af72.ts.net ").as_deref(), Some("https://pronoti.tail31af72.ts.net"));
+        assert_eq!(normalize_server("https://pronoti.tail31af72.ts.net:8443").as_deref(), Some("https://pronoti.tail31af72.ts.net:8443"));
+        assert!(normalize_server("http://pronoti.tail31af72.ts.net").is_none()); // pas HTTPS
+        assert!(normalize_server("https://evil.com").is_none()); // pas Tailscale
+        assert!(normalize_server("https://ts.net.evil.com").is_none());
+        assert!(normalize_server("https://evil.ts.net").is_none()); // pas une machine d'un réseau
+        assert!(normalize_server("https://user:pw@pronoti.tail31af72.ts.net").is_none());
+        assert!(normalize_server("https://pronoti.tail31af72.ts.net/v1").is_none());
+        assert!(normalize_server("https://pronoti.tail31af72.ts.net/?x=1").is_none());
+        assert!(normalize_server("pronoti.tail31af72.ts.net").is_none());
+        assert!(normalize_server("").is_none());
     }
 
     #[test]

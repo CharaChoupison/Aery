@@ -11,6 +11,8 @@ use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tauri::{AppHandle, Manager, State, async_runtime::JoinHandle, ipc::Channel};
 
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+/// Envoi de synchro (lot de conversations, images comprises) : même limite que le serveur.
+const MAX_SYNC_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Requêtes en cours, pour pouvoir les annuler.
 #[derive(Default)]
@@ -45,6 +47,18 @@ pub fn is_allowed_path(path: &str) -> bool {
         && path.chars().all(|c| c.is_ascii_graphic())
 }
 
+/// Routes de synchro entre appareils (server/sync.ts), seulement avec un serveur Aery.
+pub fn is_sync_path(path: &str) -> bool {
+    let (base, query) = path.split_once('?').unwrap_or((path, ""));
+    match base {
+        "/sync/status" | "/sync/push" => query.is_empty(),
+        "/sync/pull" => query
+            .strip_prefix("since=")
+            .is_some_and(|n| !n.is_empty() && n.len() <= 15 && n.chars().all(|c| c.is_ascii_digit())),
+        _ => false,
+    }
+}
+
 /// Envoie une erreur au même format JSON que FreeLLMAPI : { error: { code, message } }.
 fn emit_json_error(emit: &impl Fn(ProxyEvent) -> bool, status: u16, code: &str, message: &str) {
     let body = serde_json::json!({ "error": { "code": code, "message": message } }).to_string();
@@ -53,25 +67,42 @@ fn emit_json_error(emit: &impl Fn(ProxyEvent) -> bool, status: u16, code: &str, 
     emit(ProxyEvent::End);
 }
 
-/// Fait la requête vers FreeLLMAPI et transmet la réponse via `emit`.
+/// Où envoyer la requête : FreeLLMAPI sur ce Mac (avec la clé du Trousseau), ou le serveur Aery
+/// (qui ajoute la clé lui-même : on n'envoie AUCUNE clé).
+pub enum Target<'a> {
+    Local { port: u16, key: &'a str },
+    Server { base: &'a str },
+}
+
+/// Fait la requête et transmet la réponse via `emit`.
 /// `emit` renvoie false si l'interface n'écoute plus : on arrête alors tout de suite.
-pub async fn forward(port: u16, key: &str, method: &str, path: &str, body: Option<String>, emit: impl Fn(ProxyEvent) -> bool) {
-    let method = match method {
-        "GET" => reqwest::Method::GET,
-        "POST" => reqwest::Method::POST,
+pub async fn forward(target: Target<'_>, method: &str, path: &str, body: Option<String>, emit: impl Fn(ProxyEvent) -> bool) {
+    let method = match (method, &target) {
+        ("GET", _) => reqwest::Method::GET,
+        ("POST", _) => reqwest::Method::POST,
+        // Écritures d'admin (déjà revalidées par admin.rs) : seulement vers le serveur Aery.
+        ("PUT", Target::Server { .. }) => reqwest::Method::PUT,
+        ("DELETE", Target::Server { .. }) => reqwest::Method::DELETE,
         _ => return emit_json_error(&emit, 405, "method_not_allowed", "Méthode non autorisée"),
     };
 
-    // no_proxy : on ne passe jamais par un proxy système pour parler à 127.0.0.1.
-    let client = match reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5)).build() {
+    // no_proxy : jamais de proxy système (127.0.0.1, ou le serveur via Tailscale).
+    let timeout = match target {
+        Target::Local { .. } => Duration::from_secs(5),
+        Target::Server { .. } => Duration::from_secs(10),
+    };
+    let client = match reqwest::Client::builder().no_proxy().connect_timeout(timeout).build() {
         Ok(c) => c,
         Err(e) => return emit_json_error(&emit, 500, "internal", &e.to_string()),
     };
 
-    // L'hôte est figé à 127.0.0.1 : impossible de détourner le relais vers une autre machine.
-    let mut request = client
-        .request(method, format!("http://127.0.0.1:{port}{path}"))
-        .header("authorization", format!("Bearer {key}"));
+    // L'hôte est figé : 127.0.0.1, ou l'adresse Tailscale du serveur (validée par settings.rs).
+    let mut request = match target {
+        Target::Local { port, key } => client
+            .request(method, format!("http://127.0.0.1:{port}{path}"))
+            .header("authorization", format!("Bearer {key}")),
+        Target::Server { base } => client.request(method, format!("{base}{path}")),
+    };
     if let Some(body) = body {
         request = request.header("content-type", "application/json").body(body);
     }
@@ -79,9 +110,14 @@ pub async fn forward(port: u16, key: &str, method: &str, path: &str, body: Optio
     let response = match request.send().await {
         Ok(r) => r,
         Err(_) => {
-            let message = format!(
-                "FreeLLMAPI ne répond pas sur le port {port}. Aery a essayé de la lancer sans succès : vérifie qu’elle est bien installée, et le port dans les Paramètres."
-            );
+            let message = match target {
+                Target::Local { port, .. } => format!(
+                    "FreeLLMAPI ne répond pas sur le port {port}. Aery a essayé de la lancer sans succès : vérifie qu’elle est bien installée, et le port dans les Paramètres."
+                ),
+                Target::Server { base } => format!(
+                    "Le serveur Aery ({base}) ne répond pas. Vérifie que Tailscale est connecté sur ce Mac."
+                ),
+            };
             return emit_json_error(&emit, 502, "upstream_unreachable", &message);
         }
     };
@@ -121,6 +157,15 @@ pub fn proxy_request(
     request: ProxyRequest,
     on_event: Channel<ProxyEvent>,
 ) -> Result<(), String> {
+    // Serveur Aery : tout passe par lui (chat, statistiques, synchro).
+    if let Some(server) = settings::read_server(&app) {
+        return server_request(app, state, request, on_event, server);
+    }
+    // Pas de serveur : pas de synchro (l'interface se met en veille en voyant ce 404).
+    if request.path.starts_with("/sync/") {
+        emit_json_error(&|e| on_event.send(e).is_ok(), 404, "no_sync_server", "Pas de serveur de synchro.");
+        return Ok(());
+    }
     // Statistiques FreeLLMAPI (lecture seule) : traitées à part, voir admin.rs.
     if request.path.starts_with("/admin/") {
         return admin_request(app, state, request, on_event);
@@ -151,9 +196,56 @@ pub fn proxy_request(
             ),
             Some(key) => {
                 launcher::ensure_running(port).await;
-                forward(port, &key, &request.method, &request.path, request.body, emit).await
+                forward(Target::Local { port, key: &key }, &request.method, &request.path, request.body, emit).await
             }
         }
+        if let Ok(mut running) = task_app.state::<Requests>().0.lock() {
+            running.remove(&id);
+        }
+    });
+    running.insert(id, handle);
+    Ok(())
+}
+
+/// Relais vers le serveur Aery. Les mêmes listes blanches qu'en local s'appliquent ici AVANT l'envoi
+/// (défense en profondeur : le serveur les revérifie) ; les écritures d'admin partent avec le corps
+/// reconstruit par admin.rs, jamais celui de l'interface.
+fn server_request(
+    app: AppHandle,
+    state: State<'_, Requests>,
+    request: ProxyRequest,
+    on_event: Channel<ProxyEvent>,
+    server: String,
+) -> Result<(), String> {
+    let ProxyRequest { id, method, path, body } = request;
+    let (method, path, body) = if path.starts_with("/admin/") {
+        if method == "GET" {
+            admin::admin_api_path(&path).ok_or("Chemin non autorisé")?;
+            (method, path, None)
+        } else {
+            let (m, api_path, rebuilt) = admin::admin_write(&method, &path, body.as_deref())?;
+            let admin_path = format!("/admin/{}", api_path.strip_prefix("/api/").ok_or("Chemin non autorisé")?);
+            (m.as_str().to_string(), admin_path, rebuilt)
+        }
+    } else if is_sync_path(&path) {
+        if body.as_ref().is_some_and(|b| b.len() > MAX_SYNC_BODY_BYTES) {
+            return Err("Envoi de synchro trop volumineux".into());
+        }
+        (method, path, body)
+    } else if is_allowed_path(&path) {
+        if body.as_ref().is_some_and(|b| b.len() > MAX_BODY_BYTES) {
+            return Err("Requête trop volumineuse".into());
+        }
+        (method, path, body)
+    } else {
+        return Err("Chemin non autorisé".into());
+    };
+
+    let mut running = state.0.lock().map_err(|_| "Erreur interne")?;
+    let task_app = app.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        let emit = |event: ProxyEvent| on_event.send(event).is_ok();
+        forward(Target::Server { base: &server }, &method, &path, body, emit).await;
         if let Ok(mut running) = task_app.state::<Requests>().0.lock() {
             running.remove(&id);
         }
@@ -217,6 +309,20 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[test]
+    fn only_sync_endpoints_pass_as_sync() {
+        assert!(is_sync_path("/sync/status"));
+        assert!(is_sync_path("/sync/push"));
+        assert!(is_sync_path("/sync/pull?since=0"));
+        assert!(is_sync_path("/sync/pull?since=123456"));
+        assert!(!is_sync_path("/sync/pull"));
+        assert!(!is_sync_path("/sync/pull?since="));
+        assert!(!is_sync_path("/sync/pull?since=1&x=2"));
+        assert!(!is_sync_path("/sync/push?x=1"));
+        assert!(!is_sync_path("/sync/../admin/keys"));
+        assert!(!is_sync_path("/sync/other"));
+    }
+
+    #[test]
     fn only_chat_endpoints_are_allowed() {
         assert!(is_allowed_path("/v1/chat/completions"));
         assert!(is_allowed_path("/v1/models?available=true"));
@@ -259,7 +365,7 @@ mod tests {
         let (port, seen) = fake_upstream().await;
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
-        forward(port, "freellmapi-test1234", "POST", "/v1/chat/completions", Some("{}".into()), move |e| {
+        forward(Target::Local { port, key: "freellmapi-test1234" }, "POST", "/v1/chat/completions", Some("{}".into()), move |e| {
             sink.lock().unwrap().push(e);
             true
         })
@@ -291,7 +397,7 @@ mod tests {
         let port = TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
-        forward(port, "freellmapi-test1234", "GET", "/v1/models", None, move |e| {
+        forward(Target::Local { port, key: "freellmapi-test1234" }, "GET", "/v1/models", None, move |e| {
             sink.lock().unwrap().push(e);
             true
         })
@@ -299,5 +405,31 @@ mod tests {
         let events = events.lock().unwrap();
         assert_eq!(events[0], ProxyEvent::Head { status: 502, headers: vec![("content-type".into(), "application/json".into())] });
         assert_eq!(events.last(), Some(&ProxyEvent::End));
+    }
+
+    /// Test réel contre ton serveur Aery (via Tailscale), sans clé :
+    /// AERY_SERVER=https://serveur.xxxx.ts.net cargo test real_server -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn real_server_answers_without_key() {
+        let base = std::env::var("AERY_SERVER").expect("AERY_SERVER");
+        for path in ["/sync/status", "/v1/models?available=true"] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let sink = events.clone();
+            forward(Target::Server { base: &base }, "GET", path, None, move |e| {
+                sink.lock().unwrap().push(e);
+                true
+            })
+            .await;
+            let events = events.lock().unwrap();
+            let body: Vec<u8> = events
+                .iter()
+                .filter_map(|e| if let ProxyEvent::Chunk { data } = e { Some(data.clone()) } else { None })
+                .flatten()
+                .collect();
+            println!("{path} → {:?} ({} octets)", events.first().map(|e| match e { ProxyEvent::Head { status, .. } => *status, _ => 0 }), body.len());
+            assert!(matches!(events[0], ProxyEvent::Head { status: 200, .. }), "{path} : {}", String::from_utf8_lossy(&body));
+            assert_eq!(events.last(), Some(&ProxyEvent::End));
+        }
     }
 }

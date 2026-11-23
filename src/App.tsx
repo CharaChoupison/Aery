@@ -87,7 +87,8 @@ export default function App() {
 
   /** Clé refusée, absente ou FreeLLMAPI injoignable : écran de connexion (appli) ou Paramètres › Connexion (web). */
   function repairConnection() {
-    if (IS_TAURI) setOnboarding((o) => o ?? 'repair')
+    // L'écran guidé cherche FreeLLMAPI sur ce Mac : inutile quand l'appli passe par le serveur Aery.
+    if (IS_TAURI && !settings?.server) setOnboarding((o) => o ?? 'repair')
     else openSettings('connection')
   }
 

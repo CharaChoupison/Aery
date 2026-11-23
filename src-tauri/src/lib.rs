@@ -1,6 +1,6 @@
 //! Partie native de l'appli (Rust). Elle remplace le plugin Vite de la version web :
-//!  - settings : clé FreeLLMAPI dans le Trousseau macOS + port ;
-//!  - proxy    : relais en streaming vers FreeLLMAPI, qui ajoute la clé ;
+//!  - settings : clé FreeLLMAPI dans le Trousseau macOS + port, ou adresse du serveur Aery ;
+//!  - proxy    : relais en streaming vers FreeLLMAPI (qui ajoute la clé) ou vers le serveur Aery (chat, admin, synchro) ;
 //!  - admin    : API d’admin FreeLLMAPI (statistiques en lecture + activer un modèle, stratégie de routage, ajouter/supprimer une clé) ;
 //!  - launcher : lance FreeLLMAPI en arrière-plan si elle n'est pas ouverte ;
 //!  - onboarding : premier lancement (trouver FreeLLMAPI, tester la clé avant de l'enregistrer) ;
@@ -33,9 +33,12 @@ pub fn run() {
         .setup(|app| {
             // whisper.cpp écrit beaucoup dans la console : on le fait taire (journaux redirigés vers `log`, sans sortie).
             whisper_rs::install_logging_hooks();
-            // Dès l'ouverture, pour que FreeLLMAPI soit prête avant le premier message.
-            let port = settings::read_port(app.handle());
-            tauri::async_runtime::spawn(launcher::ensure_running(port));
+            // Dès l'ouverture, pour que FreeLLMAPI soit prête avant le premier message
+            // (sauf avec un serveur Aery : c'est lui qui parle à FreeLLMAPI).
+            if settings::read_server(app.handle()).is_none() {
+                let port = settings::read_port(app.handle());
+                tauri::async_runtime::spawn(launcher::ensure_running(port));
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

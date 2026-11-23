@@ -1,4 +1,4 @@
-import Dexie, { type EntityTable } from 'dexie'
+import Dexie, { type EntityTable, type Transaction } from 'dexie'
 import type { Conversation } from '@/hooks/useChat'
 import type { Project } from '@/lib/projects'
 import type { BrainItem, BrainVersion } from '@/lib/brain'
@@ -17,6 +17,8 @@ const db = new Dexie('freellm-chat') as Dexie & {
   brain: EntityTable<BrainItem, 'id'>
   brainVersions: EntityTable<BrainVersion, 'id'>
   tidyRuns: EntityTable<TidyRun, 'id'>
+  syncOutbox: EntityTable<SyncOutboxEntry, 'key'>
+  syncState: EntityTable<{ key: string; value: unknown }, 'key'>
 }
 
 // Version 1 du schéma : clé primaire « id », index sur « updatedAt » pour trier.
@@ -77,15 +79,91 @@ db.version(4).stores({
   tidyRuns: 'id, at',
 })
 
-export async function loadConversations(): Promise<Conversation[]> {
-  const all = await db.conversations.orderBy('updatedAt').reverse().toArray()
-  return all.map((c) => ({
+// Version 5 : synchro entre appareils (voir src/lib/sync.ts). « syncOutbox » = boîte d'envoi (une
+// entrée par enregistrement modifié ou supprimé depuis le dernier envoi), « syncState » = curseur, etc.
+db.version(5).stores({
+  conversations: 'id, updatedAt, projectId',
+  projects: 'id, updatedAt',
+  brain: 'id, updatedAt, kind, *projectIds, *tags',
+  brainVersions: 'id, itemId, runId, savedAt',
+  tidyRuns: 'id, at',
+  syncOutbox: 'key',
+  syncState: 'key',
+})
+
+// --- Synchro : chaque écriture est notée dans la boîte d'envoi -----------------------------
+//
+// Les hooks de Dexie voient TOUTES les écritures (put, bulkPut, modify, delete…), même celles faites
+// ailleurs qu'ici. Les changements sont collectés pendant la transaction et notés dans la boîte d'envoi
+// une fois la transaction réussie (une transaction ne peut écrire que dans les tables qu'elle a ouvertes).
+// Les changements appliqués PAR la synchro (venus d'un autre appareil) portent la marque `__aeryRemote`
+// et ne sont pas renvoyés, sinon deux appareils se renverraient la même chose à l'infini.
+
+export const SYNC_TABLES = ['conversations', 'projects', 'brain', 'brainVersions', 'tidyRuns'] as const
+export type SyncTable = (typeof SYNC_TABLES)[number]
+
+export interface SyncOutboxEntry {
+  key: string // « table:id »
+  table: SyncTable
+  id: string
+  at: number // moment de la modification
+  deleted: boolean
+}
+
+type MarkedTransaction = Transaction & { __aeryRemote?: boolean; __aeryChanges?: Map<string, SyncOutboxEntry> }
+
+const localChangeListeners = new Set<() => void>()
+/** Prévient (ex. le moteur de synchro) quand des changements locaux attendent d'être envoyés. */
+export function onLocalChange(listener: () => void): () => void {
+  localChangeListeners.add(listener)
+  return () => localChangeListeners.delete(listener)
+}
+
+function markChange(tx: Transaction, table: SyncTable, id: unknown, deleted: boolean): void {
+  const t = tx as MarkedTransaction
+  if (t.__aeryRemote || typeof id !== 'string') return
+  if (!t.__aeryChanges) {
+    const changes = new Map<string, SyncOutboxEntry>()
+    t.__aeryChanges = changes
+    t.on('complete', () => {
+      db.syncOutbox
+        .bulkPut([...changes.values()])
+        .then(() => localChangeListeners.forEach((l) => l()))
+        .catch(() => {
+          // Boîte d'envoi inaccessible : rattrapé au prochain « tout renvoyer » (nouvelle base serveur).
+        })
+    })
+  }
+  t.__aeryChanges.set(`${table}:${id}`, { key: `${table}:${id}`, table, id, at: Date.now(), deleted })
+}
+
+for (const name of SYNC_TABLES) {
+  const table = db.table(name)
+  table.hook('creating', function (primKey, obj, tx) {
+    markChange(tx, name, primKey ?? (obj as { id?: unknown }).id, false)
+  })
+  table.hook('updating', function (_mods, primKey, _obj, tx) {
+    markChange(tx, name, primKey, false)
+  })
+  table.hook('deleting', function (primKey, _obj, tx) {
+    markChange(tx, name, primKey, true)
+  })
+}
+
+/** Nettoie une conversation lue depuis la base (ou reçue d'un autre appareil). */
+export function normalizeConversation(c: Conversation): Conversation {
+  return {
     ...c,
     titleSource: c.titleSource ?? 'auto',
     // Une réponse vide = l'appli a été fermée avant le premier mot : on la retire.
     // (sauf si l'agent avait déjà fait des étapes : on les garde)
     messages: c.messages.filter((m) => m.role !== 'assistant' || m.content !== '' || (m.steps?.length ?? 0) > 0),
-  }))
+  }
+}
+
+export async function loadConversations(): Promise<Conversation[]> {
+  const all = await db.conversations.orderBy('updatedAt').reverse().toArray()
+  return all.map(normalizeConversation)
 }
 
 export function saveConversation(conversation: Conversation): Promise<string> {
@@ -230,5 +308,105 @@ export function mergeTables(incoming: BackupTables): Promise<Record<keyof Backup
       brainVersions: await merge(db.brainVersions, incoming.brainVersions, never),
       tidyRuns: await merge(db.tidyRuns, incoming.tidyRuns, never),
     }
+  })
+}
+
+// --- Synchro : accès à la base pour src/lib/sync.ts --------------------------------------------
+
+export interface SyncChange {
+  table: SyncTable
+  id: string
+  at: number
+  deleted: boolean
+  data?: unknown
+}
+
+/** Ce que la synchro a changé ici : enregistrements remplacés et identifiants supprimés, par table. */
+export type AppliedChanges = Partial<Record<SyncTable, { put: unknown[]; deleted: string[] }>>
+
+const syncTable = (name: SyncTable) => db.table(name) as unknown as EntityTable<{ id: string }, 'id'>
+
+export async function getSyncState<T>(key: string): Promise<T | undefined> {
+  return (await db.syncState.get(key))?.value as T | undefined
+}
+
+export async function setSyncState(key: string, value: unknown): Promise<void> {
+  await db.syncState.put({ key, value })
+}
+
+/** Les changements en attente d'envoi (les plus anciens d'abord). */
+export async function readOutbox(): Promise<SyncOutboxEntry[]> {
+  return (await db.syncOutbox.toArray()).sort((a, b) => a.at - b.at)
+}
+
+/** Enregistrements actuels (undefined = supprimé depuis). */
+export function getSyncRecords(table: SyncTable, ids: string[]): Promise<({ id: string } | undefined)[]> {
+  return syncTable(table).bulkGet(ids)
+}
+
+/**
+ * Retire de la boîte d'envoi les entrées envoyées, sauf celles modifiées PENDANT l'envoi
+ * (leur `at` a changé) : elles repartiront au prochain tour.
+ */
+export function clearSentOutbox(sent: SyncOutboxEntry[]): Promise<void> {
+  return db.transaction('rw', db.syncOutbox, async () => {
+    const current = await db.syncOutbox.bulkGet(sent.map((e) => e.key))
+    const done = sent.filter((e, i) => current[i]?.at === e.at).map((e) => e.key)
+    await db.syncOutbox.bulkDelete(done)
+  })
+}
+
+/**
+ * Met tout le contenu local dans la boîte d'envoi (premier branchement, ou base du serveur recréée).
+ * Chaque enregistrement garde sa date de modification : entre deux appareils, le plus récent gagnera.
+ */
+export function enqueueEverything(): Promise<number> {
+  return db.transaction('rw', [...SYNC_TABLES.map((t) => db.table(t)), db.syncOutbox], async () => {
+    let count = 0
+    for (const table of SYNC_TABLES) {
+      const rows = (await db.table(table).toArray()) as { id: string; updatedAt?: number; savedAt?: number; at?: number }[]
+      const keys = rows.map((r) => `${table}:${r.id}`)
+      const existing = await db.syncOutbox.bulkGet(keys)
+      const entries = rows
+        .filter((_, i) => !existing[i])
+        .map((r) => ({ key: `${table}:${r.id}`, table, id: r.id, at: r.updatedAt ?? r.savedAt ?? r.at ?? Date.now(), deleted: false }))
+      await db.syncOutbox.bulkPut(entries)
+      count += entries.length
+    }
+    return count
+  })
+}
+
+/**
+ * Applique les changements reçus du serveur (le plus récent gagne). Un enregistrement modifié ici
+ * plus récemment (dans la boîte d'envoi) est gardé : c'est lui qui repartira vers le serveur.
+ * Un enregistrement identique à ce qu'on a déjà (souvent : notre propre envoi qui revient) est ignoré.
+ */
+export function applyRemoteChanges(changes: SyncChange[]): Promise<AppliedChanges> {
+  return db.transaction('rw', [...SYNC_TABLES.map((t) => db.table(t)), db.syncOutbox], async (tx) => {
+    ;(tx as MarkedTransaction).__aeryRemote = true
+    const applied: AppliedChanges = {}
+    const note = (table: SyncTable) => (applied[table] ??= { put: [], deleted: [] })
+    const pending = await db.syncOutbox.bulkGet(changes.map((c) => `${c.table}:${c.id}`))
+    for (const [i, c] of changes.entries()) {
+      if (!(SYNC_TABLES as readonly string[]).includes(c.table)) continue
+      const local = pending[i]
+      if (local && local.at > c.at) continue
+      if (local) await db.syncOutbox.delete(local.key)
+      const table = syncTable(c.table)
+      const current = await table.get(c.id)
+      if (c.deleted) {
+        if (!current) continue
+        await table.delete(c.id)
+        note(c.table).deleted.push(c.id)
+      } else {
+        const data = c.data as { id?: unknown } | undefined
+        if (!data || data.id !== c.id) continue
+        if (current && JSON.stringify(current) === JSON.stringify(data)) continue
+        await table.put(data as { id: string })
+        note(c.table).put.push(data)
+      }
+    }
+    return applied
   })
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { chatCompletion } from '@/lib/api'
 import type { Attachment } from '@/lib/attachments'
-import { deleteBrainItemFromDb, loadBrain, saveBrainItems, saveBrainVersions } from '@/lib/db'
+import { deleteBrainItemFromDb, loadBrain, saveBrainItems, saveBrainVersions, type AppliedChanges } from '@/lib/db'
+import { SYNC_APPLIED_EVENT } from '@/lib/sync'
 import {
   BRAIN_LIMITS,
   ENRICH_PROMPT,
@@ -46,6 +47,25 @@ export function useBrain() {
       .then((stored) => setItems((prev) => [...prev, ...stored.filter((s) => !prev.some((p) => p.id === s.id))]))
       .catch(() => setError('Impossible de lire le cerveau.'))
       .finally(() => setLoaded(true))
+  }, [])
+
+  // Changements venus d'un autre appareil (déjà écrits dans IndexedDB par la synchro).
+  useEffect(() => {
+    const onApplied = (e: Event) => {
+      const changes = (e as CustomEvent<AppliedChanges>).detail.brain
+      if (!changes) return
+      const incoming = changes.put as BrainItem[]
+      const byId = new Map(incoming.map((i) => [i.id, i]))
+      const prev = itemsRef.current
+      const next = [
+        ...incoming.filter((i) => !prev.some((p) => p.id === i.id)),
+        ...prev.filter((i) => !changes.deleted.includes(i.id)).map((i) => byId.get(i.id) ?? i),
+      ]
+      itemsRef.current = next
+      setItems(next)
+    }
+    window.addEventListener(SYNC_APPLIED_EVENT, onApplied)
+    return () => window.removeEventListener(SYNC_APPLIED_EVENT, onApplied)
   }, [])
 
   const persist = useCallback((changed: BrainItem[]) => {

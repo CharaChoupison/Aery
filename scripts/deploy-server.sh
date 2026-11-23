@@ -67,7 +67,7 @@ fi
 STAGE="$("${SSH[@]}" "$HOST" 'mktemp -d /tmp/aery-deploy.XXXXXX')"
 echo "→ Envoi vers $HOST (${VERSION:0:7})"
 rsync -a --delete -e "ssh -o ConnectTimeout=10" dist/ "$HOST:$STAGE/dist/"
-rsync -a -e "ssh -o ConnectTimeout=10" server/backend.ts server/standalone.ts "$HOST:$STAGE/server/"
+rsync -a -e "ssh -o ConnectTimeout=10" server/backend.ts server/standalone.ts server/sync.ts "$HOST:$STAGE/server/"
 "${SSH[@]}" "$HOST" "printf '{\"type\":\"module\"}\n' > $STAGE/server/package.json && printf '%s\n' '$VERSION' > $STAGE/VERSION"
 rsync -a -e "ssh -o ConnectTimeout=10" scripts/server/ "$HOST:$STAGE/tools/"
 

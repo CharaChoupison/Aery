@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, chatCompletion, isAbortError, isRouterModel, sendsImages, streamChat, type ChatMessage } from '@/lib/api'
 import { textWithFiles, type Attachment } from '@/lib/attachments'
-import { deleteConversationFromDb, loadConversations, saveConversation } from '@/lib/db'
+import {
+  deleteConversationFromDb,
+  loadConversations,
+  normalizeConversation,
+  saveConversation,
+  type AppliedChanges,
+} from '@/lib/db'
+import { SYNC_APPLIED_EVENT } from '@/lib/sync'
 import { buildSystemPrompt, getPreferences, samplingParams } from '@/lib/preferences'
 import {
   buildProjectPrompt,
@@ -233,6 +240,33 @@ export function useChat(options: Options = {}) {
       .finally(() => setLoaded(true))
     // Si l'appli se ferme pendant une réponse, on coupe la requête.
     return () => abortRef.current?.abort()
+  }, [])
+
+  // --- Changements venus d'un autre appareil (synchro) ----------------------------
+  // Déjà écrits dans IndexedDB par la synchro : on met juste l'écran à jour. On les note dans
+  // savedRef pour que la sauvegarde automatique ne les réenregistre pas (sinon ils repartiraient).
+  // La conversation en train de recevoir une réponse n'est jamais remplacée.
+  const streamingIdRef = useRef(streamingId)
+  useEffect(() => {
+    streamingIdRef.current = streamingId
+  })
+  useEffect(() => {
+    const onApplied = (e: Event) => {
+      const changes = (e as CustomEvent<AppliedChanges>).detail.conversations
+      if (!changes) return
+      const streaming = streamingIdRef.current
+      const deleted = new Set(changes.deleted.filter((id) => id !== streaming))
+      const incoming = (changes.put as Conversation[]).filter((c) => c.id !== streaming).map(normalizeConversation)
+      for (const id of deleted) savedRef.current.delete(id)
+      for (const c of incoming) savedRef.current.set(c.id, c)
+      const byId = new Map(incoming.map((c) => [c.id, c]))
+      setConversations((prev) => [
+        ...incoming.filter((c) => !prev.some((p) => p.id === c.id)),
+        ...prev.filter((c) => !deleted.has(c.id)).map((c) => byId.get(c.id) ?? c),
+      ])
+    }
+    window.addEventListener(SYNC_APPLIED_EVENT, onApplied)
+    return () => window.removeEventListener(SYNC_APPLIED_EVENT, onApplied)
   }, [])
 
   // --- Sauvegarde automatique -----------------------------------------------------

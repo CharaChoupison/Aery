@@ -22,12 +22,14 @@ import {
   SquareSlash,
   Sun,
   Trash2,
+  Unplug,
   UserRound,
   type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { BackupSection } from '@/components/settings/BackupSection'
+import { SyncSection } from '@/components/settings/SyncSection'
 import { CommandsPage } from '@/components/settings/CommandsPage'
 import { DictationPage } from '@/components/settings/DictationPage'
 import { KeysPage } from '@/components/settings/KeysPage'
@@ -317,6 +319,8 @@ function GeneralPage() {
         />
       </Group>
 
+      <SyncSection />
+
       <BackupSection />
     </>
   )
@@ -485,7 +489,107 @@ function MaxTokensInput({ value, onCommit }: { value: number; onCommit: (v: numb
 
 type Status = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok'; text: string } | { kind: 'error'; text: string }
 
+/** Version web servie par le serveur Aery (via Tailscale), pas le serveur de dev du Mac. */
+const ON_SERVER = !IS_TAURI && typeof location !== 'undefined' && location.hostname.endsWith('.ts.net')
+
+/**
+ * Appli : passer par le serveur Aery (chat, statistiques, synchro), ou par FreeLLMAPI sur ce Mac.
+ * Avec un serveur, la clé et le compte d'admin sont sur le serveur : rien d'autre à régler ici.
+ */
+function ServerGroup({ settings, onSaved }: { settings: Settings | null; onSaved: (settings: Settings) => void }) {
+  const [address, setAddress] = useState('')
+  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const server = settings?.server ?? null
+
+  async function save(value: string) {
+    setStatus({ kind: 'busy' })
+    try {
+      const saved = await saveSettings({ server: value })
+      onSaved(saved)
+      setAddress('')
+      if (!saved.server) {
+        setStatus({ kind: 'ok', text: 'L’appli repasse par FreeLLMAPI sur ce Mac.' })
+        return
+      }
+      const models = await listModels()
+      setStatus({ kind: 'ok', text: `Connecté au serveur : ${models.length} modèles disponibles.` })
+    } catch (e) {
+      setStatus({ kind: 'error', text: e instanceof ApiError ? e.message : 'Connexion au serveur impossible.' })
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (address.trim()) void save(address.trim())
+      }}
+    >
+      <Group title="Serveur Aery">
+        {server ? (
+          <Row
+            label="Connectée au serveur"
+            description={
+              <>
+                <code className="font-mono text-xs">{server}</code> : chat, statistiques et synchro passent par lui (via
+                Tailscale). FreeLLMAPI n’a plus besoin d’être ouverte sur ce Mac.
+              </>
+            }
+            control={
+              <Button type="button" variant="outline" className="h-9 px-3" disabled={status.kind === 'busy'} onClick={() => void save('')}>
+                <Unplug aria-hidden />
+                Ne plus l’utiliser
+              </Button>
+            }
+          />
+        ) : (
+          <Row
+            label="Adresse du serveur"
+            description="Ton serveur Aery sur Tailscale (ex. https://serveur.xxxx.ts.net). Tout passera par lui : mêmes modèles, mêmes clés et historique synchronisé sur tous tes appareils."
+          >
+            <div className="flex gap-2">
+              <Input
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="https://…ts.net"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Adresse du serveur Aery"
+                className="h-9 font-mono"
+              />
+              <Button type="submit" disabled={status.kind === 'busy' || !address.trim()} className="h-9 min-w-28 px-4">
+                {status.kind === 'busy' ? <LoaderCircle className="animate-spin" aria-label="Chargement" /> : 'Utiliser'}
+              </Button>
+            </div>
+          </Row>
+        )}
+      </Group>
+      {status.kind === 'ok' && (
+        <Notice tone="success" icon={CircleCheck}>
+          {status.text}
+        </Notice>
+      )}
+      {status.kind === 'error' && (
+        <Notice tone="error" icon={CircleAlert}>
+          {status.text}
+        </Notice>
+      )}
+    </form>
+  )
+}
+
 function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSaved: (settings: Settings) => void }) {
+  // Appli branchée sur un serveur Aery : la clé et le port de FreeLLMAPI ne servent plus ici.
+  if (IS_TAURI && settings?.server) return <ServerGroup settings={settings} onSaved={onSaved} />
+  return (
+    <>
+      {IS_TAURI && <ServerGroup settings={settings} onSaved={onSaved} />}
+      <LocalConnectionForm settings={settings} onSaved={onSaved} />
+    </>
+  )
+}
+
+function LocalConnectionForm({ settings, onSaved }: { settings: Settings | null; onSaved: (settings: Settings) => void }) {
   const [key, setKey] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [port, setPort] = useState(String(settings?.port ?? 31415))
@@ -538,7 +642,9 @@ function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSa
       <Group title="FreeLLMAPI">
         {!settings?.hasKey && (
           <Notice tone="warning" icon={Info}>
-            Colle ta clé FreeLLMAPI pour commencer. Tu la trouves dans le dashboard de l’appli desktop.
+            {ON_SERVER
+              ? 'Colle la clé FreeLLMAPI du serveur pour commencer (page Keys de son dashboard).'
+              : 'Colle ta clé FreeLLMAPI pour commencer. Tu la trouves dans le dashboard de l’appli desktop.'}
           </Notice>
         )}
 
@@ -549,7 +655,9 @@ function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSa
               ? `Actuelle : ${settings.keyHint}. Laisse vide pour la garder.`
               : IS_TAURI
                 ? 'Stockée dans le Trousseau macOS, jamais renvoyée à l’interface.'
-                : 'Stockée sur ton ordi dans ~/.freellm-chat/, jamais renvoyée au navigateur.'
+                : ON_SERVER
+                  ? 'Stockée sur le serveur, jamais renvoyée au navigateur.'
+                  : 'Stockée sur ton ordi dans ~/.freellm-chat/, jamais renvoyée au navigateur.'
           }
         >
           <div className="flex gap-2">
@@ -583,7 +691,7 @@ function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSa
 
         <Row
           label="Port"
-          description="31415 par défaut. Vérifie le port affiché dans l’appli FreeLLMAPI."
+          description={ON_SERVER ? 'Port de FreeLLMAPI sur le serveur (3001).' : '31415 par défaut. Vérifie le port affiché dans l’appli FreeLLMAPI.'}
           control={
             <Input
               type="number"
@@ -641,7 +749,7 @@ function ConnectionPage({ settings, onSaved }: { settings: Settings | null; onSa
       <Group title="Accès à FreeLLMAPI">
         <Row
           label="Modèles, clés, utilisation et analytique"
-          description="Ces pages passent par la session de l’appli desktop FreeLLMAPI. Le chat peut seulement lire les statistiques, activer ou désactiver un modèle, et ajouter ou supprimer une clé de fournisseur. Il ne peut ni afficher une clé en clair, ni toucher aux autres réglages."
+          description={`${ON_SERVER ? 'Ces pages passent par le compte d’admin enregistré sur le serveur.' : 'Ces pages passent par la session de l’appli desktop FreeLLMAPI.'} Le chat peut seulement lire les statistiques, activer ou désactiver un modèle, et ajouter ou supprimer une clé de fournisseur. Il ne peut ni afficher une clé en clair, ni toucher aux autres réglages.`}
         />
       </Group>
     </form>
