@@ -1,0 +1,48 @@
+# Service systemd d'Aery (version web) sur le serveur. Installé par scripts/deploy-server.sh.
+[Unit]
+Description=Aery (interface web, privee via Tailscale)
+After=network-online.target freellmapi.service
+Wants=network-online.target
+
+[Service]
+User=aery
+Group=aery
+WorkingDirectory=/opt/aery
+EnvironmentFile=/etc/aery/env
+Environment=NODE_ENV=production
+Environment=AERY_PORT=3080
+Environment=AERY_DIST=/opt/aery/dist
+Environment=AERY_CONFIG_FILE=/var/lib/aery/config.json
+Environment=FREELLM_PORT=3001
+# Compte d'admin FreeLLMAPI ({ email, password }), écrit par /opt/aery/set-admin.sh.
+# systemd le copie dans un dossier privé lisible par ce service seul ($CREDENTIALS_DIRECTORY).
+LoadCredential=freellm-admin:/etc/aery/freellm-admin.json
+ExecStart=/usr/bin/node /opt/aery/server/standalone.ts
+Restart=on-failure
+RestartSec=5
+
+StateDirectory=aery
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+MemoryMax=512M
+CPUWeight=50
+
+[Install]
+WantedBy=multi-user.target

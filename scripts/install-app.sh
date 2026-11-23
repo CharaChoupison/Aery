@@ -7,6 +7,7 @@
 #   --pull                      récupère d'abord les nouveautés de GitHub (git pull en avance rapide)
 #   --build-only                construit seulement
 #   --install-only --wait-pid N installe le .app déjà construit, une fois le processus N terminé
+#   --no-server                 ne met pas à jour la version web du serveur (voir scripts/deploy-server.sh)
 #
 # L'historique (IndexedDB), la clé (Trousseau) et le port sont stockés hors du .app : rien n'est perdu.
 set -euo pipefail
@@ -23,9 +24,11 @@ PULL=0
 BUILD=1
 INSTALL=1
 WAIT_PID=""
+SERVER=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL=1 ;;
+    --no-server) SERVER=0 ;;
     --build-only) INSTALL=0 ;;
     --install-only) BUILD=0 ;;
     --wait-pid) WAIT_PID="${2:?--wait-pid attend un numéro de processus}"; shift ;;
@@ -86,6 +89,14 @@ if [ "$BUILD" = 1 ]; then
   if [ ! -d "$BUILT" ]; then
     echo "Erreur : $BUILT introuvable après la construction." >&2
     exit 1
+  fi
+
+  # La version web du serveur (pronoti) suit l'appli : même commit, même dist/ (construit par Tauri).
+  # Seulement si tout est commité, et sans jamais bloquer la mise à jour de l'appli Mac.
+  if [ "$SERVER" = 1 ]; then
+    echo "==> Mise à jour de la version web sur le serveur"
+    bash "$ROOT/scripts/deploy-server.sh" --no-build --if-clean ||
+      echo "Note : la version web du serveur n'a pas pu être mise à jour (l'appli Mac, elle, continue)."
   fi
 fi
 

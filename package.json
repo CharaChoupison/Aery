@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "tauri build",
-    "app:install": "bash scripts/install-app.sh"
+    "app:install": "bash scripts/install-app.sh",
+    "server:deploy": "bash scripts/deploy-server.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
