@@ -53,6 +53,8 @@ interface Props {
   commands?: SlashCommand[]
   /** Texte d'exemple du champ (absent = celui par défaut). */
   placeholder?: string
+  /** Texte déjà écrit dans le champ au montage (ex. premier message proposé), modifiable. */
+  initialValue?: string
 }
 
 const MAX_HEIGHT = 200 // px : au-delà, le champ défile au lieu de grandir
@@ -73,10 +75,18 @@ export function Composer({
   modelUsesTools = null,
   commands = [],
   placeholder,
+  initialValue = '',
 }: Props) {
   // Recherche web et second cerveau : simples préférences (activées par défaut), lues par useChat à chaque envoi.
   const { webSearch, brain } = usePreferences()
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(initialValue)
+  // Nouveau texte proposé alors que le champ est déjà affiché (ex. fin de l'écran de connexion) :
+  // on le pose dans le champ (synchronisé pendant le rendu), puis on y met le curseur (effet plus bas).
+  const [lastInitial, setLastInitial] = useState(initialValue)
+  if (initialValue !== lastInitial) {
+    setLastInitial(initialValue)
+    if (initialValue) setValue(initialValue)
+  }
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [reading, setReading] = useState(0) // fichiers en cours de lecture
   const [fileError, setFileError] = useState<string | null>(null)
@@ -196,6 +206,14 @@ export function Composer({
   useEffect(() => {
     if (!isTouch) ref.current?.focus()
   }, [focusKey])
+
+  // Texte proposé : curseur à la fin, prêt à être modifié ou envoyé.
+  useEffect(() => {
+    const el = ref.current
+    if (!initialValue || !el || isTouch) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [initialValue])
 
   /** Lit les fichiers choisis (bouton, glisser-déposer ou coller) et les ajoute à la liste. */
   async function addFiles(files: File[]) {

@@ -3,6 +3,7 @@
 //!  - proxy    : relais en streaming vers FreeLLMAPI, qui ajoute la clé ;
 //!  - admin    : API d’admin FreeLLMAPI (statistiques en lecture + activer un modèle, stratégie de routage, ajouter/supprimer une clé) ;
 //!  - launcher : lance FreeLLMAPI en arrière-plan si elle n'est pas ouverte ;
+//!  - onboarding : premier lancement (trouver FreeLLMAPI, tester la clé avant de l'enregistrer) ;
 //!  - updates  : mise à jour de l'appli depuis le repo git du projet ;
 //!  - workspace : dossiers de travail de l'agent (lecture seule : lister, lire, chercher) ;
 //!  - vault    : export du second cerveau en dossier Markdown (coffre Obsidian) ;
@@ -13,6 +14,7 @@ mod admin;
 mod backup;
 mod dictation;
 mod launcher;
+mod onboarding;
 mod proxy;
 mod settings;
 mod updates;
@@ -39,6 +41,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings::get_settings,
             settings::save_settings,
+            onboarding::freellm_status,
+            onboarding::connect_freellm,
+            onboarding::open_freellm,
+            onboarding::open_freellm_download,
             proxy::proxy_request,
             proxy::cancel_request,
             updates::check_updates,

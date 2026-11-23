@@ -48,6 +48,8 @@ export interface Conversation {
 export interface ChatError {
   message: string
   code?: string
+  /** Statut HTTP (401 = clé refusée…), 0 si FreeLLMAPI n'a pas été jointe. */
+  status?: number
   retryHistory: UiMessage[] // historique à renvoyer si on clique sur « Réessayer »
   retryOverrides?: SendOverrides // options du message (commande slash) à garder pour « Réessayer »
 }
@@ -454,6 +456,7 @@ export function useChat(options: Options = {}) {
           setError(convId, {
             message: apiError?.message ?? 'Une erreur inattendue est survenue.',
             code: apiError?.code,
+            status: apiError?.status,
             retryHistory: history,
             retryOverrides: overrides,
           })
@@ -605,10 +608,10 @@ export function useChat(options: Options = {}) {
 
   /** Choisir un modèle : il s'applique à la conversation ouverte ET devient le défaut des nouvelles. */
   const setModel = useCallback(
-    (model: string) => {
+    (model: string, options: { defaultOnly?: boolean } = {}) => {
       setDefaultModel(model)
       writeDefaultModel(model)
-      if (activeId) updateConversation(activeId, (c) => ({ ...c, model }))
+      if (activeId && !options.defaultOnly) updateConversation(activeId, (c) => ({ ...c, model }))
     },
     [activeId, updateConversation],
   )

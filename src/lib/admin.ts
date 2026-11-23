@@ -307,6 +307,35 @@ export function addKey(input: { platform: string; key: string; label?: string })
   return adminRequest<AddKeyResult>('keys', { method: 'POST', body: input })
 }
 
+/** Fournisseurs sans compte pas encore activés (pas de clé anonyme). `kind` : ne garder que ce type. */
+export function keylessToActivate(providers: Provider[], keys: ProviderKey[], kind?: Provider['kind']): Provider[] {
+  return providers.filter(
+    (p) => p.keyless && (!kind || p.kind === kind) && !keys.some((k) => k.platform === p.platform && k.keyless),
+  )
+}
+
+/**
+ * Active des fournisseurs sans compte : FreeLLMAPI enregistre une « clé » anonyme (POST keys sans `key`).
+ * L'un après l'autre (une seule base côté FreeLLMAPI). Renvoie les erreurs, sans s'arrêter à la première.
+ */
+export async function activateKeyless(
+  providers: Provider[],
+  onProgress?: (platform: string, busy: boolean) => void,
+): Promise<string[]> {
+  const errors: string[] = []
+  for (const p of providers) {
+    onProgress?.(p.platform, true)
+    try {
+      await addKey({ platform: p.platform, key: '' })
+    } catch (e) {
+      errors.push(`${p.name} : ${e instanceof ApiError ? e.message : 'activation impossible.'}`)
+    } finally {
+      onProgress?.(p.platform, false)
+    }
+  }
+  return errors
+}
+
 export function deleteKey(id: number) {
   return adminRequest<{ success: boolean }>(`keys/${id}`, { method: 'DELETE' })
 }

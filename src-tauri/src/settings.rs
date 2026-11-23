@@ -19,6 +19,12 @@ pub struct Settings {
     port: u16,
 }
 
+impl Settings {
+    pub fn key_hint(&self) -> Option<&str> {
+        self.key_hint.as_deref()
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsUpdate {
@@ -59,6 +65,17 @@ fn key_hint(key: &str) -> String {
     format!("{prefix}…{}", &key[key.len().saturating_sub(4)..])
 }
 
+/// Enregistre la clé dans le Trousseau (après validation du format).
+pub fn store_key(key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if !is_valid_key(key) {
+        return Err("Clé invalide : pas d’espaces, entre 8 et 512 caractères.".into());
+    }
+    keychain_entry()?
+        .set_password(key)
+        .map_err(|e| format!("Enregistrement impossible dans le Trousseau : {e}"))
+}
+
 // --- Port (petit fichier JSON dans le dossier de config de l'appli) -------------------
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -78,7 +95,7 @@ pub fn read_port(app: &AppHandle) -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
-fn write_port(app: &AppHandle, port: u16) -> Result<(), String> {
+pub fn write_port(app: &AppHandle, port: u16) -> Result<(), String> {
     let path = config_path(app)?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -110,13 +127,7 @@ pub fn save_settings(app: AppHandle, update: SettingsUpdate) -> Result<Settings,
             Err(e) => return Err(format!("Suppression impossible dans le Trousseau : {e}")),
         }
     } else if let Some(key) = update.api_key {
-        let key = key.trim();
-        if !is_valid_key(key) {
-            return Err("Clé invalide : pas d’espaces, entre 8 et 512 caractères.".into());
-        }
-        keychain_entry()?
-            .set_password(key)
-            .map_err(|e| format!("Enregistrement impossible dans le Trousseau : {e}"))?;
+        store_key(&key)?;
     }
 
     if let Some(port) = update.port {

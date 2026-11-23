@@ -1,4 +1,4 @@
-import { BookmarkCheck, BookmarkPlus, Brain, ChevronRight, Cpu, Eye, GitBranchPlus, LoaderCircle, RotateCcw, Square } from 'lucide-react'
+import { BookmarkCheck, BookmarkPlus, Brain, ChevronRight, Cpu, Eye, GitBranchPlus, LoaderCircle, RotateCcw, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { AgentSteps } from '@/components/AgentSteps'
 import { Appear } from '@/components/Appear'
@@ -22,10 +22,13 @@ interface Props {
   onRetry?: () => void
   /** « Dupliquer à partir d'ici » : nouvelle conversation qui s'arrête à cette réponse. */
   onDuplicate?: () => void
+  /** Mettre en avant « Garder dans le cerveau » (première réponse après la connexion). */
+  highlightSave?: boolean
+  onDismissSaveHint?: () => void
 }
 
 /** Une réponse de l'assistant : réflexion éventuelle, texte Markdown, actions. */
-export function AssistantMessage({ message: m, streaming, isLast, saved = false, onSave, onRetry, onDuplicate }: Props) {
+export function AssistantMessage({ message: m, streaming, isLast, saved = false, onSave, onRetry, onDuplicate, highlightSave = false, onDismissSaveHint }: Props) {
   // La réflexion peut arriver dans un champ à part (m.reasoning) ou entre balises <think> dans le texte.
   const inline = splitThinking(m.content)
   const thinking = [m.reasoning, inline.thinking].filter(Boolean).join('\n\n')
@@ -77,10 +80,25 @@ export function AssistantMessage({ message: m, streaming, isLast, saved = false,
               size="icon-sm"
               onClick={() => onSave(answer)}
               aria-pressed={saved}
-              className={cn(saved && 'text-primary')}
+              className={cn(saved && 'text-primary', highlightSave && !saved && 'bg-primary/10 text-primary ring-2 ring-primary/40')}
             >
               {saved ? <BookmarkCheck className="size-3.5" aria-hidden /> : <BookmarkPlus className="size-3.5" aria-hidden />}
             </IconButton>
+          )}
+          {onSave && highlightSave && !saved && (
+            <Appear
+              from={{ autoAlpha: 0, x: -6, duration: 0.4 }}
+              className="mr-1 flex items-center gap-0.5 rounded-full bg-primary/10 py-0.5 pr-0.5 pl-2.5 text-xs text-primary"
+            >
+              <button type="button" onClick={() => onSave(answer)} className="hover:underline">
+                Garde cette réponse dans ton cerveau
+              </button>
+              {onDismissSaveHint && (
+                <IconButton label="Ne plus afficher" size="icon-xs" onClick={onDismissSaveHint} className="text-primary hover:text-primary">
+                  <X className="size-3" aria-hidden />
+                </IconButton>
+              )}
+            </Appear>
           )}
           {onRetry && (
             <IconButton label="Réessayer" size="icon-sm" onClick={onRetry}>

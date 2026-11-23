@@ -6,6 +6,7 @@ import { Composer } from '@/components/Composer'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { IconButton } from '@/components/IconButton'
 import { MessageList } from '@/components/MessageList'
+import { Onboarding } from '@/components/Onboarding'
 import { ModelPicker } from '@/components/ModelPicker'
 import { SettingsDialog, type SettingsTab } from '@/components/SettingsDialog'
 import { Sidebar } from '@/components/Sidebar'
@@ -34,6 +35,7 @@ import { Button } from '@/components/ui/button'
 import { useNavHistory, type Place } from '@/hooks/useNavHistory'
 import { NavArrows, useNavShortcuts } from '@/components/NavArrows'
 import { ApiError, getSettings, type Settings } from '@/lib/api'
+import { readSaveHint, STARTER_MESSAGE, writeSaveHint } from '@/lib/onboarding'
 import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { hasCustomModelSettings, usePreferences } from '@/lib/preferences'
 import { useTheme } from '@/lib/theme'
@@ -66,6 +68,12 @@ export default function App() {
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true) // grand écran : barre dépliée ou repliée
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false) // mobile : panneau coulissant
+  // Écran « Connecter FreeLLMAPI » (appli seulement) : null = fermé, 'first' = premier lancement, 'repair' = depuis une erreur.
+  const [onboarding, setOnboarding] = useState<'first' | 'repair' | null>(null)
+  // Premier message proposé après la connexion (modifiable, envoyé par la personne).
+  const [starter, setStarter] = useState('')
+  // Mettre en avant « Garder dans le cerveau » sous la première réponse.
+  const [saveHint, setSaveHint] = useState(readSaveHint)
 
   const prefs = usePreferences()
   const motion = useMotion()
@@ -75,6 +83,17 @@ export default function App() {
   function openSettings(tab: SettingsTab) {
     setSettingsTab(tab)
     setSettingsOpen(true)
+  }
+
+  /** Clé refusée, absente ou FreeLLMAPI injoignable : écran de connexion (appli) ou Paramètres › Connexion (web). */
+  function repairConnection() {
+    if (IS_TAURI) setOnboarding((o) => o ?? 'repair')
+    else openSettings('connection')
+  }
+
+  function dismissSaveHint() {
+    setSaveHint(false)
+    writeSaveHint(false)
   }
 
   // Demandes d'ouverture venues d'ailleurs (ex. « Ouvrir Paramètres › Dictée » sous le champ de saisie).
@@ -96,7 +115,7 @@ export default function App() {
   const brain = useBrain()
   const chat = useChat({
     brainItems: brain.items,
-    onMissingKey: () => openSettings('connection'),
+    onMissingKey: repairConnection,
     isVisionModel,
     isToolModel,
     getProject: projects.getProject,
@@ -183,7 +202,11 @@ export default function App() {
     getSettings()
       .then((s) => {
         setSettings(s)
-        if (!s.hasKey) openSettings('connection')
+        // Appli : écran de connexion guidé. Web : Paramètres › Connexion, comme avant.
+        if (!s.hasKey) {
+          if (IS_TAURI) setOnboarding('first')
+          else openSettings('connection')
+        }
       })
       .catch((e) => setSettingsError(e instanceof ApiError ? e.message : 'Impossible de lire les réglages.'))
     startUpdateChecks() // appli installée seulement : y a-t-il une nouvelle version dans le repo git ?
@@ -256,11 +279,31 @@ export default function App() {
   /** « Garder dans le cerveau » sous une réponse : on garde aussi la question, pour le titre. */
   function saveReply(messageId: string, answer: string) {
     if (!active) return
+    if (saveHint) dismissSaveHint()
     const index = active.messages.findIndex((m) => m.id === messageId)
     const question = active.messages.slice(0, index).findLast((m) => m.role === 'user')?.content ?? ''
     brain.saveReply({ conversationId: active.id, messageId, question, answer })
   }
   const savedIds = new Set(brain.items.flatMap((i) => (i.origin?.messageId ? [i.origin.messageId] : [])))
+  // Première réponse d'une conversation, juste après la connexion : on met en avant « Garder dans le cerveau ».
+  const highlightSaveId =
+    saveHint && active?.messages.length === 2 && active.messages[1].role === 'assistant' ? active.messages[1].id : null
+
+  /** « Commencer à discuter » : premier lancement → nouvelle conversation en Auto avec un premier message proposé. */
+  function finishOnboarding() {
+    const mode = onboarding
+    setOnboarding(null)
+    void models.refresh()
+    setModelsVersion((v) => v + 1)
+    if (mode !== 'first') return // réparation : on revient là où on était
+    setNoteId(null)
+    setSpace('chat')
+    chat.newConversation(null)
+    chat.setModel('auto', { defaultOnly: true })
+    setStarter(STARTER_MESSAGE)
+    setSaveHint(true)
+    writeSaveHint(true)
+  }
 
   const sidebarProps = {
     conversations: chat.conversations,
@@ -347,8 +390,12 @@ export default function App() {
         />
       )}
       <Composer
-        // Espace Cerveau : la question part dans une conversation du Chat, avec la recherche dans les notes.
-        onSend={space === 'brain' ? (text, files) => chat.send(text, files, { brain: true }) : chat.send}
+        onSend={(text, files) => {
+          if (starter) setStarter('')
+          // Espace Cerveau : la question part dans une conversation du Chat, avec la recherche dans les notes.
+          return space === 'brain' ? chat.send(text, files, { brain: true }) : chat.send(text, files)
+        }}
+        initialValue={starter}
         placeholder={space === 'brain' ? 'Demande quelque chose à ton cerveau…' : undefined}
         onStop={chat.stop}
         isStreaming={activeIsStreaming}
@@ -383,7 +430,23 @@ export default function App() {
 
   return (
     <TooltipProvider delay={300}>
-      <div className="flex h-dvh bg-background text-foreground">
+      {/* Appli : écran de connexion par-dessus tout (sauf les Paramètres, ouverts depuis « Ajouter une clé fournisseur »).
+          Pendant la lecture des réglages, un fond vide évite d'apercevoir le chat avant cet écran. */}
+      {IS_TAURI && settings === null && !settingsError && <div className="fixed inset-0 z-40 bg-background" />}
+      {onboarding && settings && (
+        <div className="fixed inset-0 z-40">
+          <Onboarding
+            settings={settings}
+            repair={onboarding === 'repair'}
+            modelsVersion={modelsVersion}
+            onSettingsChange={setSettings}
+            onOpenKeys={() => openSettings('keys')}
+            onStart={finishOnboarding}
+            onCancel={onboarding === 'repair' && settings.hasKey ? () => setOnboarding(null) : undefined}
+          />
+        </div>
+      )}
+      <div inert={onboarding !== null} className="flex h-dvh bg-background text-foreground">
         {/* Grand écran : barre latérale fixe, repliable (inert = ignorée au clavier quand elle est cachée) */}
         <aside ref={asideRef} inert={!sidebarOpen} className="hidden shrink-0 overflow-hidden md:block">
           <div className="h-full w-72 border-r border-sidebar-border">
@@ -545,6 +608,9 @@ export default function App() {
                 onRegenerate={isStreaming ? undefined : () => void chat.regenerate()}
                 onDuplicate={(messageId) => chat.duplicateFrom(active.id, messageId)}
                 onEdit={(messageId, text) => chat.editMessage(active.id, messageId, text)}
+                onRepair={repairConnection}
+                highlightSaveId={highlightSaveId}
+                onDismissSaveHint={dismissSaveHint}
               />
               <div className={cn('mx-auto w-full px-4 pb-4', widthClass)}>
                 {composer}

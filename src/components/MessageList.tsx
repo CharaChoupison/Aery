@@ -1,4 +1,4 @@
-import { ArrowDown, CircleAlert, FileText, RotateCcw } from 'lucide-react'
+import { ArrowDown, CircleAlert, FileText, PlugZap, RotateCcw } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Appear } from '@/components/Appear'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { gsap, useGSAP, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import type { ChatError, UiMessage } from '@/hooks/useChat'
 import { formatSize } from '@/lib/attachments'
+import { isConnectionError } from '@/lib/onboarding'
 
 interface Props {
   messages: UiMessage[]
@@ -27,12 +28,18 @@ interface Props {
   onDuplicate?: (messageId: string) => void
   /** Modifier un de ses messages (renvoie une erreur, ou null). */
   onEdit?: (messageId: string, text: string) => string | null
+  /** « Réparer la connexion », proposé quand la clé est refusée ou FreeLLMAPI injoignable. */
+  onRepair?: () => void
+  /** Réponse dont on met en avant « Garder dans le cerveau » (première réponse après la connexion). */
+  highlightSaveId?: string | null
+  onDismissSaveHint?: () => void
 }
+
 
 /** Distance (en px) en dessous de laquelle on considère qu'on est « en bas ». */
 const STICK_THRESHOLD = 80
 
-export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave, onRegenerate, onDuplicate, onEdit }: Props) {
+export function MessageList({ messages, isStreaming, error, canRetry, onRetry, widthClass = 'max-w-3xl', savedIds, onSave, onRegenerate, onDuplicate, onEdit, onRepair, highlightSaveId, onDismissSaveHint }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // useRef et pas useState : on n'a pas besoin de re-render quand ça change.
   const atBottomRef = useRef(true)
@@ -119,6 +126,8 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
                   // Réessayer seulement la dernière : refaire une ancienne effacerait la suite (pas de branches).
                   onRetry={m.id === lastId && !isStreaming && !error ? onRegenerate : undefined}
                   onDuplicate={onDuplicate && (() => onDuplicate(m.id))}
+                  highlightSave={m.id === highlightSaveId && !isStreaming}
+                  onDismissSaveHint={onDismissSaveHint}
                 />
               </Appear>
             ),
@@ -135,12 +144,20 @@ export function MessageList({ messages, isStreaming, error, canRetry, onRetry, w
                 <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                 {error.message}
               </span>
-              {canRetry && (
-                <Button variant="outline" size="sm" onClick={onRetry} className="gap-1.5">
-                  <RotateCcw className="size-3.5" aria-hidden />
-                  Réessayer
-                </Button>
-              )}
+              <span className="flex gap-2">
+                {onRepair && isConnectionError(error) && (
+                  <Button variant="outline" size="sm" onClick={onRepair} className="gap-1.5">
+                    <PlugZap className="size-3.5" aria-hidden />
+                    Réparer la connexion
+                  </Button>
+                )}
+                {canRetry && (
+                  <Button variant="outline" size="sm" onClick={onRetry} className="gap-1.5">
+                    <RotateCcw className="size-3.5" aria-hidden />
+                    Réessayer
+                  </Button>
+                )}
+              </span>
             </Appear>
           )}
         </div>

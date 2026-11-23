@@ -27,7 +27,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useAdminData } from '@/hooks/useAdminData'
-import { addKey, deleteKey, formatCompact, formatNumber, getKeys, getProviders, type Provider, type ProviderKey } from '@/lib/admin'
+import { activateKeyless, addKey, deleteKey, formatCompact, formatNumber, getKeys, getProviders, keylessToActivate, type Provider, type ProviderKey } from '@/lib/admin'
 import { ApiError, listSearchEngines, type SearchEngine } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -214,7 +214,7 @@ function KeylessGroup({
 
   const anonKeys = (platform: string) => keys.filter((k) => k.platform === platform && k.keyless)
   const inactive = (p: Provider) => p.kind === 'search' && activeSearch !== null && !activeSearch.has(p.platform)
-  const toActivate = list.filter((p) => anonKeys(p.platform).length === 0 && !inactive(p))
+  const toActivate = keylessToActivate(list, keys).filter((p) => !inactive(p))
 
   const mark = (platform: string, on: boolean) =>
     setBusy((prev) => {
@@ -240,17 +240,8 @@ function KeylessGroup({
 
   async function activateAll() {
     setError(null)
-    // L'un après l'autre : FreeLLMAPI écrit dans une seule base, inutile de le bousculer.
-    for (const p of toActivate) {
-      mark(p.platform, true)
-      try {
-        await addKey({ platform: p.platform, key: '' })
-      } catch (e) {
-        setError(`${p.name} : ${e instanceof ApiError ? e.message : 'activation impossible.'}`)
-      } finally {
-        mark(p.platform, false)
-      }
-    }
+    const errors = await activateKeyless(toActivate, mark)
+    if (errors.length > 0) setError(errors.join(' · '))
     onChanged()
   }
 
