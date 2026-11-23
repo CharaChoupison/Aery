@@ -12,6 +12,7 @@ const dateFormat = new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'num
 const REASONS: Record<BrainVersion['reason'], string> = {
   tidy: 'Avant le rangement',
   restore: 'Avant une restauration',
+  merge: 'Avant une fusion',
 }
 
 /** Versions gardées d'un élément (avant chaque rangement ou restauration), avec aperçu et « Restaurer ». */

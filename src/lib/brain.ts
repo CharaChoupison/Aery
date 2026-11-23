@@ -1,4 +1,5 @@
 import type { Attachment } from './attachments'
+import type { DuplicateHint } from './brainDuplicates'
 
 /**
  * Le second cerveau : tout ce que l'utilisateur a choisi de garder (notes, réponses du chat,
@@ -41,6 +42,8 @@ export interface BrainItem {
   moc?: boolean
   /** Dernier rangement de cet élément. Modifié après (updatedAt plus récent) = à ranger de nouveau. */
   tidiedAt?: number
+  /** Doublon possible repéré à l'entrée (brainDuplicates.ts) : une suggestion, jamais appliquée seule. */
+  duplicateOf?: DuplicateHint
   createdAt: number
   updatedAt: number
 }
@@ -54,7 +57,7 @@ export interface BrainVersion {
   itemId: string
   /** Rangement qui a fait la modification (pour pouvoir l'annuler en entier). */
   runId?: string
-  reason: 'tidy' | 'restore'
+  reason: 'tidy' | 'restore' | 'merge'
   savedAt: number
   item: BrainItem
 }
@@ -91,6 +94,7 @@ export function sanitizeItem(item: BrainItem): BrainItem {
     projectIds: [...new Set(item.projectIds)],
     folder: item.folder ? sanitizeFolder(item.folder) || undefined : undefined,
     links: item.links ? [...new Set(item.links)].filter((id) => id !== item.id).slice(0, 30) : undefined,
+    duplicateOf: item.duplicateOf?.of && item.duplicateOf.of !== item.id ? item.duplicateOf : undefined,
   }
 }
 

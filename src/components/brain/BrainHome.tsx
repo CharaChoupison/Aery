@@ -1,4 +1,4 @@
-import { Brain, Folder, Plus, Search, Sparkles, Upload, X } from 'lucide-react'
+import { Brain, Copy, Folder, Plus, Search, Sparkles, Upload, X } from 'lucide-react'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Appear } from '@/components/Appear'
 import { BRAIN_KIND_ICONS } from '@/components/brain/kinds'
@@ -295,8 +295,14 @@ function ItemRow({
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">{dateFormat.format(item.updatedAt)}</span>
           </span>
           {preview && <span className="line-clamp-2 text-sm text-muted-foreground">{preview}</span>}
-          {(item.tags.length > 0 || linked.length > 0 || item.folder) && (
+          {(item.tags.length > 0 || linked.length > 0 || item.folder || item.duplicateOf) && (
             <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              {item.duplicateOf && (
+                <span className="flex items-center gap-1 font-medium text-foreground">
+                  <Copy className="size-3" aria-hidden />
+                  Doublon possible
+                </span>
+              )}
               {item.folder && (
                 <span className="flex items-center gap-1">
                   <Folder className="size-3" aria-hidden />

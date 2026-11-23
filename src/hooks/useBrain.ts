@@ -3,9 +3,9 @@ import { chatCompletion } from '@/lib/api'
 import type { Attachment } from '@/lib/attachments'
 import { deleteBrainItemFromDb, loadBrain, saveBrainItems, saveBrainVersions, type AppliedChanges } from '@/lib/db'
 import { SYNC_APPLIED_EVENT } from '@/lib/sync'
+import { buildEnrichPrompt, findDuplicateCandidates, mergeItems, parseDuplicate } from '@/lib/brainDuplicates'
 import {
   BRAIN_LIMITS,
-  ENRICH_PROMPT,
   firstLine,
   itemAsAttachment,
   newBrainItem,
@@ -124,14 +124,26 @@ export function useBrain() {
   /**
    * Titre et tags proposés par le modèle (une petite requête, comme le titre des conversations).
    * Seulement si l'utilisateur n'a rien changé entre-temps. En cas d'échec, on garde le provisoire.
+   *
+   * Profite de la même requête pour repérer un doublon (brainDuplicates.ts) : candidats trouvés
+   * en local d'abord, le modèle ne tranche que s'il y en a. Ce n'est qu'une suggestion.
    */
   const enrich = useCallback(
     async (id: string, text: string) => {
+      const fresh = itemsRef.current.find((i) => i.id === id)
+      const candidates = fresh ? findDuplicateCandidates(fresh, itemsRef.current) : []
+      const exact = candidates.find((c) => c.exact)
+      const suggest = (of: string, reason: string, isExact = false) =>
+        // Pas de nouvel updatedAt : ce n'est pas une modification du contenu.
+        mutate((i) => (i.id === id && !i.duplicateOf ? { ...i, duplicateOf: { of, reason, exact: isExact || undefined, at: Date.now() } } : i))
+      if (exact) suggest(exact.item.id, 'Texte identique.', true)
       try {
         const { content } = await chatCompletion([
-          { role: 'system', content: ENRICH_PROMPT },
+          { role: 'system', content: buildEnrichPrompt(exact ? [] : candidates) },
           { role: 'user', content: text.slice(0, 4000) },
         ])
+        const duplicate = exact ? null : parseDuplicate(content, candidates)
+        if (duplicate) suggest(duplicate.id, duplicate.reason)
         const result = parseEnrichment(content)
         if (!result) return
         const before = itemsRef.current.find((i) => i.id === id)
@@ -146,6 +158,41 @@ export function useBrain() {
       }
     },
     [mutate],
+  )
+
+  /** « Garder les deux » : on oublie la suggestion. */
+  const dismissDuplicate = useCallback(
+    (id: string) => mutate((i) => (i.id === id && i.duplicateOf ? { ...i, duplicateOf: undefined } : i)),
+    [mutate],
+  )
+
+  /**
+   * « Fusionner » : le texte de `id` est ajouté à la fin de la note ressemblante (copie gardée
+   * dans ses versions avant), puis `id` est supprimé. Les liens vers `id` pointent vers la cible.
+   * Renvoie l'id de la cible, ou une erreur.
+   */
+  const mergeDuplicate = useCallback(
+    async (id: string): Promise<{ targetId?: string; error?: string }> => {
+      const source = itemsRef.current.find((i) => i.id === id)
+      const target = source?.duplicateOf && itemsRef.current.find((i) => i.id === source.duplicateOf?.of)
+      if (!source || !target) return { error: 'La note ressemblante n’existe plus.' }
+      const merged = mergeItems(target, source)
+      if (!merged) return { error: 'Fusion impossible : la note obtenue serait trop longue.' }
+      const now = Date.now()
+      await saveBrainVersions([
+        { id: crypto.randomUUID(), itemId: target.id, reason: 'merge', savedAt: now, item: target },
+        { id: crypto.randomUUID(), itemId: source.id, reason: 'merge', savedAt: now, item: source },
+      ])
+      mutate((i) => {
+        if (i.id === target.id) return sanitizeItem(merged)
+        const links = i.links?.includes(source.id) ? i.links.map((l) => (l === source.id ? target.id : l)) : null
+        const hint = i.duplicateOf?.of === source.id ? { ...i.duplicateOf, of: target.id } : null
+        return links || hint ? sanitizeItem({ ...i, ...(links && { links }), ...(hint && { duplicateOf: hint }) }) : i
+      })
+      remove(source.id)
+      return { targetId: target.id }
+    },
+    [mutate, remove],
   )
 
   /** « Garder dans le cerveau » sous une réponse du chat. */
@@ -294,6 +341,8 @@ export function useBrain() {
     remove,
     saveReply,
     quickNote,
+    dismissDuplicate,
+    mergeDuplicate,
     keepFile,
     keepLink,
     projectFiles,

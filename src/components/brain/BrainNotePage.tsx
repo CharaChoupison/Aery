@@ -6,6 +6,7 @@ import {
   CheckSquare,
   CircleAlert,
   Code,
+  Copy,
   ExternalLink,
   Folder,
   FolderKanban,
@@ -15,6 +16,7 @@ import {
   List,
   ListChecks,
   LoaderCircle,
+  Merge,
   MessageSquare,
   Mic,
   MoreHorizontal,
@@ -135,6 +137,8 @@ export function BrainNotePage({
   const [projectError, setProjectError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [merging, setMerging] = useState(false)
+  const [mergeError, setMergeError] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPatch = useRef<Partial<Draft>>({})
   const titleRef = useRef<HTMLTextAreaElement>(null)
@@ -310,6 +314,19 @@ export function BrainNotePage({
     })
   }
 
+  /** Doublon possible : la note ressemblante (si elle existe encore). */
+  const twin = item.duplicateOf ? brain.items.find((i) => i.id === item.duplicateOf?.of) : undefined
+
+  async function mergeIntoTwin() {
+    flush() // ce qui vient d'être tapé part aussi dans la fusion
+    setMerging(true)
+    setMergeError(null)
+    const { targetId, error } = await brain.mergeDuplicate(item.id)
+    setMerging(false)
+    if (targetId) onOpenNote(targetId)
+    else setMergeError(error ?? 'La fusion a échoué.')
+  }
+
   const folders = useMemo(() => [...new Set([...PARA_FOLDERS, ...allFolders(brain.items)])].sort((a, b) => a.localeCompare(b, 'fr')), [brain.items])
   const related = useMemo(() => relatedItems({ ...item, content: draft.content }, brain.items), [item, draft.content, brain.items])
   const rendered = useMemo(() => linkifyWikilinks(draft.content, brain.items), [draft.content, brain.items])
@@ -414,6 +431,30 @@ export function BrainNotePage({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <Appear from={{ autoAlpha: 0, y: 12, duration: 0.4 }} className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-10 pb-32 sm:px-12">
+          {twin && (
+            <div role="status" className="mb-6 flex flex-col gap-3 rounded-xl border bg-muted/40 p-4 text-sm sm:flex-row sm:items-center">
+              <Copy className="hidden size-4 shrink-0 text-muted-foreground sm:block" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p>
+                  Ressemble à{' '}
+                  <button type="button" onClick={() => onOpenNote(twin.id)} className="font-medium underline underline-offset-2 hover:text-foreground">
+                    {itemTitle(twin)}
+                  </button>
+                </p>
+                <p className="text-muted-foreground">{item.duplicateOf?.reason}</p>
+                {mergeError && <p className="mt-1 text-destructive">{mergeError}</p>}
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button size="sm" className="rounded-full" onClick={() => void mergeIntoTwin()} disabled={merging || dictating}>
+                  {merging ? <LoaderCircle className="animate-spin" aria-hidden /> : <Merge aria-hidden />}
+                  Fusionner
+                </Button>
+                <Button size="sm" variant="ghost" className="rounded-full" onClick={() => brain.dismissDuplicate(item.id)} disabled={merging}>
+                  Garder les deux
+                </Button>
+              </div>
+            </div>
+          )}
           <textarea
             ref={titleRef}
             rows={1}
