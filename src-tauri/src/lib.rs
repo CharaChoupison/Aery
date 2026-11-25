@@ -13,6 +13,8 @@
 mod admin;
 mod backup;
 mod dictation;
+#[cfg(target_os = "macos")]
+mod system_audio;
 mod launcher;
 mod onboarding;
 mod proxy;

@@ -29,6 +29,14 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 cpal = "0.18"
 sha2 = "0.10"
 
+# Son du Mac (ce qui sort des haut-parleurs) : « process tap » de Core Audio (macOS 14.2+),
+# mêmes versions que celles utilisées par cpal.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation"] }
+objc2-core-foundation = { version = "0.3.1", features = ["CFString", "CFDictionary", "CFArray"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSUUID", "NSValue"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 

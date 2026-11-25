@@ -1,4 +1,4 @@
-import { ArrowUp, Bot, Brain, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Mic, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
+import { ArrowUp, Bot, Brain, CircleAlert, Eye, FileText, FolderCode, FolderOpen, Globe, Mic, MonitorSpeaker, Paperclip, Plus, Square, Upload, X } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Appear } from '@/components/Appear'
@@ -109,10 +109,11 @@ export function Composer({
   })
   const dictating = dictation.phase !== 'idle'
 
-  function startDictation() {
+  /** source 'system' = transcrire le son du Mac (vidéo, réunion…) au lieu du micro. */
+  function startDictation(source: 'mic' | 'system' = 'mic') {
     const el = ref.current
     baseRef.current = { text: value, start: el?.selectionStart ?? value.length, end: el?.selectionEnd ?? value.length }
-    void dictation.start()
+    void dictation.start(source)
   }
 
   // Pendant la dictée, le champ suit le texte qui s'écrit (défile jusqu'en bas).
@@ -526,16 +527,28 @@ export function Composer({
             className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-none placeholder:text-muted-foreground"
           />
           {CAN_DICTATE && !dictating && (
-            <IconButton
-              label="Dicter (transcrit sur ton Mac)"
-              side="top"
-              type="button"
-              onClick={startDictation}
-              size="icon-lg"
-              className="rounded-full text-muted-foreground"
-            >
-              <Mic className="size-5" aria-hidden />
-            </IconButton>
+            <>
+              <IconButton
+                label="Transcrire le son du Mac (vidéo, réunion…)"
+                side="top"
+                type="button"
+                onClick={() => startDictation('system')}
+                size="icon-lg"
+                className="rounded-full text-muted-foreground"
+              >
+                <MonitorSpeaker className="size-5" aria-hidden />
+              </IconButton>
+              <IconButton
+                label="Dicter (transcrit sur ton Mac)"
+                side="top"
+                type="button"
+                onClick={() => startDictation()}
+                size="icon-lg"
+                className="rounded-full text-muted-foreground"
+              >
+                <Mic className="size-5" aria-hidden />
+              </IconButton>
+            </>
           )}
           {dictating ? null : isStreaming ? (
             <IconButton label="Arrêter la réponse" side="top" type="button" onClick={onStop} variant="default" size="icon-lg" className="rounded-full">

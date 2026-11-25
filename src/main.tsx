@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { registerServiceWorker } from './lib/pwa'
 import { startSync } from './lib/sync'
 import { applyInitialTheme } from './lib/theme'
 
@@ -10,6 +11,8 @@ import { applyInitialTheme } from './lib/theme'
 applyInitialTheme()
 // Synchro entre appareils (sans serveur de synchro, elle se met en veille toute seule).
 startSync()
+// Version web : l'interface reste sur l'appareil et s'ouvre même sans Tailscale.
+registerServiceWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

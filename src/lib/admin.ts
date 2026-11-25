@@ -4,7 +4,7 @@
 // trois écritures (activer des modèles, ajouter / supprimer une clé de fournisseur).
 
 import { ApiError } from './api'
-import { appFetch, IS_TAURI } from './transport'
+import { appFetch, IS_TAURI, WEB_UNREACHABLE } from './transport'
 
 async function adminGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   return adminRequest<T>(path, { signal })
@@ -23,7 +23,7 @@ async function adminRequest<T>(
     })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e
-    throw new ApiError(0, IS_TAURI ? 'Erreur interne de l’appli.' : 'Impossible de joindre le serveur local (npm run dev).')
+    throw new ApiError(0, IS_TAURI ? 'Erreur interne de l’appli.' : WEB_UNREACHABLE)
   }
   if (!res.ok) {
     let message = `Erreur ${res.status}`

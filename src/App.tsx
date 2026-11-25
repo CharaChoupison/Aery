@@ -199,18 +199,42 @@ export default function App() {
   useNavShortcuts(nav)
 
   // Au démarrage : on récupère les réglages, et s'il n'y a pas de clé on ouvre les paramètres.
+  // Version web hors connexion (Tailscale coupé) : l'interface s'ouvre quand même grâce au service
+  // worker, et on réessaie toutes les 20 s et au retour au premier plan jusqu'à ce que le serveur réponde.
   useEffect(() => {
-    getSettings()
-      .then((s) => {
-        setSettings(s)
-        // Appli : écran de connexion guidé. Web : Paramètres › Connexion, comme avant.
-        if (!s.hasKey) {
-          if (IS_TAURI) setOnboarding('first')
-          else openSettings('connection')
-        }
-      })
-      .catch((e) => setSettingsError(e instanceof ApiError ? e.message : 'Impossible de lire les réglages.'))
+    let done = false
+    let busy = false
+    const load = () => {
+      if (done || busy) return
+      busy = true
+      getSettings()
+        .then((s) => {
+          done = true
+          setSettings(s)
+          setSettingsError(null)
+          // Appli : écran de connexion guidé. Web : Paramètres › Connexion, comme avant.
+          if (!s.hasKey) {
+            if (IS_TAURI) setOnboarding('first')
+            else openSettings('connection')
+          }
+        })
+        .catch((e) => setSettingsError(e instanceof ApiError ? e.message : 'Impossible de lire les réglages.'))
+        .finally(() => {
+          busy = false
+        })
+    }
+    load()
+    const retry = IS_TAURI ? undefined : setInterval(load, 20_000)
+    const onVisible = () => document.visibilityState === 'visible' && load()
+    window.addEventListener('online', load)
+    document.addEventListener('visibilitychange', onVisible)
     startUpdateChecks() // appli installée seulement : y a-t-il une nouvelle version dans le repo git ?
+    return () => {
+      done = true
+      clearInterval(retry)
+      window.removeEventListener('online', load)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   /** Changer d'espace : on quitte la conversation ouverte pour l'accueil de l'autre espace. */

@@ -57,7 +57,7 @@ import {
   type ThemePreference,
 } from '@/lib/preferences'
 import { switchTheme } from '@/lib/theme'
-import { IS_TAURI } from '@/lib/transport'
+import { IS_TAURI, ON_SERVER } from '@/lib/transport'
 import { CAN_UPDATE, checkForUpdates, startUpdate, useUpdates } from '@/lib/updates'
 import { cn } from '@/lib/utils'
 
@@ -488,9 +488,6 @@ function MaxTokensInput({ value, onCommit }: { value: number; onCommit: (v: numb
 // --- Connexion ------------------------------------------------------------------------------
 
 type Status = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok'; text: string } | { kind: 'error'; text: string }
-
-/** Version web servie par le serveur Aery (via Tailscale), pas le serveur de dev du Mac. */
-const ON_SERVER = !IS_TAURI && typeof location !== 'undefined' && location.hostname.endsWith('.ts.net')
 
 /**
  * Appli : passer par le serveur Aery (chat, statistiques, synchro), ou par FreeLLMAPI sur ce Mac.

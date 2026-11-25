@@ -10,12 +10,15 @@
 //!    on découpe donc le son en morceaux, figés à chaque pause (ou au bout de 24 s) ;
 //!  - `stop_dictation` coupe le micro, transcrit le dernier morceau et renvoie le texte complet ;
 //!  - `cancel_dictation` coupe le micro et jette le son.
+//!
+//! Deux sources de son (`Source`) : le micro, ou le son du Mac (ce qui sort des haut-parleurs :
+//! vidéo, réunion, cours…), capté par `system_audio.rs`. Le reste est identique.
 
 use cpal::{
     SampleFormat, SizedSample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -23,7 +26,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -70,8 +73,33 @@ const LANGUAGES: &[&str] = &["auto", "fr", "en", "es", "de", "it", "pt", "nl"];
 
 /// Whisper travaille en 16 kHz mono.
 const WHISPER_RATE: u32 = 16_000;
-/// Au-delà, on arrête d'enregistrer (10 minutes ≈ 115 Mo de son en 48 kHz).
-const MAX_RECORDING: Duration = Duration::from_secs(10 * 60);
+/// D'où vient le son.
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Source {
+    Mic,
+    /// Le son du Mac (toutes les applis), par un « process tap » de Core Audio.
+    System,
+}
+
+impl Source {
+    /// Au-delà, on arrête d'enregistrer. Le son déjà transcrit est jeté au fur et à mesure : seul le
+    /// morceau en cours (24 s max) reste en mémoire, d'où une durée longue possible pour une réunion.
+    fn max_recording(self) -> Duration {
+        match self {
+            Source::Mic => Duration::from_secs(10 * 60),
+            Source::System => Duration::from_secs(3 * 60 * 60),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Source::Mic => "le micro",
+            Source::System => "le son du Mac",
+        }
+    }
+}
+
 /// Plus court que ça, c'est un clic par erreur : on ne transcrit pas.
 const MIN_SECONDS: f32 = 0.4;
 /// Sous ce niveau, le son est vide : en général, macOS a refusé l'accès au micro.
@@ -127,13 +155,19 @@ struct Recording {
     shared: Arc<Shared>,
     model: &'static Model,
     language: &'static str,
+    source: Source,
 }
 
 /// Partagé entre le micro, la transcription en direct et `stop_dictation`.
 #[derive(Default)]
 struct Shared {
-    /// Son enregistré, déjà en mono, à la fréquence du micro.
+    /// Son enregistré pas encore figé (la transcription en direct jette le reste), en mono, à la
+    /// fréquence de la source.
     buffer: Mutex<Vec<f32>>,
+    /// Nombre total d'échantillons reçus depuis le début.
+    total: AtomicUsize,
+    /// true dès qu'un son non muet est arrivé (sinon : accès refusé par macOS).
+    heard: AtomicBool,
     rate: AtomicU32,
     /// false = dictée terminée ou annulée : la transcription en direct s'arrête (même en plein calcul).
     running: AtomicBool,
@@ -143,8 +177,6 @@ struct Shared {
 #[derive(Default)]
 struct Progress {
     text: String,
-    /// Position (dans `buffer`) de la fin du dernier morceau figé.
-    at: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -162,6 +194,7 @@ pub enum DictationEvent {
 
 /// Tourne dans son propre fil : le flux audio de macOS doit rester là où il a été créé.
 fn record(
+    source: Source,
     ready: mpsc::Sender<Result<(), String>>,
     stop: mpsc::Receiver<()>,
     shared: Arc<Shared>,
@@ -172,18 +205,35 @@ fn record(
         Err(message)
     };
 
-    let host = cpal::default_host();
-    let Some(device) = host.default_input_device() else {
-        return fail("Aucun micro trouvé. Branche-en un ou choisis-le dans Réglages Système › Son.".into());
+    // Son du Mac : le tap doit vivre tant que le flux tourne (lâché après lui, en bas).
+    #[cfg(target_os = "macos")]
+    let mut tap = None;
+    let device = match source {
+        Source::Mic => match cpal::default_host().default_input_device() {
+            Some(d) => d,
+            None => return fail("Aucun micro trouvé. Branche-en un ou choisis-le dans Réglages Système › Son.".into()),
+        },
+        #[cfg(target_os = "macos")]
+        Source::System => match crate::system_audio::open() {
+            Ok((t, d)) => {
+                tap = Some(t);
+                d
+            }
+            Err(e) => return fail(e),
+        },
+        #[cfg(not(target_os = "macos"))]
+        Source::System => return fail("L'écoute du son de l'ordinateur n'existe que sur Mac.".into()),
     };
+    let what = source.name();
     let config = match device.default_input_config() {
         Ok(c) => c,
-        Err(e) => return fail(format!("Impossible d'utiliser le micro : {e}")),
+        Err(e) => return fail(format!("Impossible d'utiliser {what} : {e}")),
     };
     let rate = config.sample_rate();
     shared.rate.store(rate, Ordering::Relaxed);
     let peak = Arc::new(AtomicU32::new(0));
-    let max_samples = rate as usize * MAX_RECORDING.as_secs() as usize;
+    let max_recording = source.max_recording();
+    let max_samples = rate as usize * max_recording.as_secs() as usize;
 
     let (b, p) = (shared.clone(), peak.clone());
     let stream_config = config.config();
@@ -192,14 +242,14 @@ fn record(
         SampleFormat::I16 => build_stream::<i16>(&device, stream_config, b, p, max_samples),
         SampleFormat::I32 => build_stream::<i32>(&device, stream_config, b, p, max_samples),
         SampleFormat::U16 => build_stream::<u16>(&device, stream_config, b, p, max_samples),
-        other => return fail(format!("Format de micro non géré : {other}")),
+        other => return fail(format!("Format de son non géré : {other}")),
     };
     let stream = match stream {
         Ok(s) => s,
-        Err(e) => return fail(format!("Impossible d'ouvrir le micro : {e}")),
+        Err(e) => return fail(format!("Impossible d'ouvrir {what} : {e}")),
     };
     if let Err(e) = stream.play() {
-        return fail(format!("Impossible de démarrer le micro : {e}"));
+        return fail(format!("Impossible de démarrer {what} : {e}"));
     }
     let _ = ready.send(Ok(()));
 
@@ -212,16 +262,18 @@ fn record(
         }
         let level = f32::from_bits(peak.swap(0, Ordering::Relaxed)).min(1.0);
         let _ = on_event.send(DictationEvent::Level { level });
-        if !limit_sent && started.elapsed() >= MAX_RECORDING {
+        if !limit_sent && started.elapsed() >= max_recording {
             limit_sent = true;
             let _ = on_event.send(DictationEvent::Limit);
         }
         // Filet de sécurité si l'interface a disparu sans arrêter la dictée.
-        if started.elapsed() >= MAX_RECORDING + Duration::from_secs(120) {
+        if started.elapsed() >= max_recording + Duration::from_secs(120) {
             break;
         }
     }
     drop(stream); // libère le micro (le voyant orange de macOS s'éteint)
+    #[cfg(target_os = "macos")]
+    drop(tap); // puis seulement le tap du son du Mac
     Ok(())
 }
 
@@ -241,7 +293,7 @@ where
         config,
         move |data: &[T], _| {
             let Ok(mut buf) = shared.buffer.lock() else { return };
-            if buf.len() >= max_samples {
+            if shared.total.load(Ordering::Relaxed) >= max_samples {
                 return;
             }
             let mut local_peak = 0f32;
@@ -250,6 +302,10 @@ where
                 let sample = frame.iter().map(|s| s.to_sample::<f32>()).sum::<f32>() / channels as f32;
                 local_peak = local_peak.max(sample.abs());
                 buf.push(sample);
+            }
+            shared.total.fetch_add(data.len() / channels, Ordering::Relaxed);
+            if local_peak >= SILENCE_PEAK {
+                shared.heard.store(true, Ordering::Relaxed);
             }
             // Pour des flottants positifs, l'ordre des bits suit l'ordre des valeurs : fetch_max marche.
             peak.fetch_max(local_peak.to_bits(), Ordering::Relaxed);
@@ -394,6 +450,11 @@ pub fn join_text(a: &str, b: &str) -> String {
 }
 
 /// Les derniers caractères du texte (sans couper un caractère en deux).
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 fn prompt_tail(text: &str) -> &str {
     let count = text.chars().count();
     match text.char_indices().nth(count.saturating_sub(PROMPT_CHARS)) {
@@ -445,7 +506,7 @@ fn live_transcription(
             continue;
         }
         let chunk = match shared.buffer.lock() {
-            Ok(buf) => buf.get(progress.at..).unwrap_or_default().to_vec(),
+            Ok(buf) => buf.clone(),
             Err(_) => break,
         };
         if ((chunk.len() - last_len.min(chunk.len())) as f32) < rate as f32 * LIVE_MIN_NEW {
@@ -465,7 +526,14 @@ fn live_transcription(
         let commit = seconds >= CHUNK_MAX_SECONDS || (seconds >= CHUNK_MIN_SECONDS && ends_with_pause(&chunk, rate));
         if commit {
             progress.text = join_text(&progress.text, &text);
-            progress.at += chunk.len();
+            // Morceau figé : son son ne sert plus, on le jette (une réunion de 2 h ne remplit pas la mémoire).
+            match shared.buffer.lock() {
+                Ok(mut buf) => {
+                    let n = chunk.len().min(buf.len());
+                    buf.drain(..n);
+                }
+                Err(_) => break,
+            }
             last_len = 0;
             let _ = on_event.send(DictationEvent::Partial { committed: progress.text.clone(), pending: String::new() });
         } else {
@@ -643,6 +711,7 @@ pub async fn start_dictation(
     state: State<'_, Dictation>,
     model: String,
     language: String,
+    source: Source,
     on_event: Channel<DictationEvent>,
 ) -> Result<(), String> {
     let model = find_model(&model)?;
@@ -658,7 +727,7 @@ pub async fn start_dictation(
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
     let (s, events) = (shared.clone(), on_event.clone());
-    let handle = thread::spawn(move || record(ready_tx, stop_rx, s, events));
+    let handle = thread::spawn(move || record(source, ready_tx, stop_rx, s, events));
     let ready = tauri::async_runtime::spawn_blocking(move || ready_rx.recv_timeout(Duration::from_secs(10)))
         .await
         .map_err(|e| e.to_string())?;
@@ -667,7 +736,7 @@ pub async fn start_dictation(
         Ok(Err(message)) => return Err(message),
         Err(_) => {
             let _ = stop_tx.send(());
-            return Err("Le micro ne répond pas.".into());
+            return Err(format!("{} ne répond pas.", capitalize(source.name())));
         }
     }
 
@@ -679,7 +748,7 @@ pub async fn start_dictation(
     // Transcription en direct (elle charge aussi le modèle pendant que tu commences à parler).
     let (cache, s) = (state.context.clone(), shared.clone());
     let live = thread::spawn(move || live_transcription(app, cache, model, language, s, on_event));
-    *recording = Some(Recording { stop: stop_tx, thread: handle, live, shared, model, language });
+    *recording = Some(Recording { stop: stop_tx, thread: handle, live, shared, model, language, source });
     Ok(())
 }
 
@@ -696,21 +765,24 @@ pub async fn stop_dictation(app: AppHandle, state: State<'_, Dictation>) -> Resu
     let cache = state.context.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        recording.thread.join().map_err(|_| "Le micro s'est arrêté brutalement.")??;
+        recording.thread.join().map_err(|_| "L'enregistrement s'est arrêté brutalement.")??;
         let progress = recording.live.join().unwrap_or_default();
         let shared = recording.shared;
         let rate = shared.rate.load(Ordering::Relaxed);
-        let buffer = std::mem::take(&mut *shared.buffer.lock().map_err(|_| "Enregistrement illisible.")?);
-        if rate == 0 || (buffer.len() as f32) < rate as f32 * MIN_SECONDS {
+        let total = shared.total.load(Ordering::Relaxed);
+        if rate == 0 || (total as f32) < rate as f32 * MIN_SECONDS {
             return Ok(String::new());
         }
-        if buffer.iter().fold(0f32, |m, s| m.max(s.abs())) < SILENCE_PEAK {
-            return Err(
-                "Aucun son capté. Vérifie que Aery a accès au micro : Réglages Système › Confidentialité et sécurité › Micro.".into(),
-            );
+        if !shared.heard.load(Ordering::Relaxed) {
+            return Err(match recording.source {
+                Source::Mic => "Aucun son capté. Vérifie que Aery a accès au micro : Réglages Système › Confidentialité et sécurité › Micro.",
+                Source::System => "Aucun son capté. Vérifie que quelque chose joue, et que Aery a accès à Réglages Système › Confidentialité et sécurité › Enregistrement audio du système.",
+            }
+            .into());
         }
         // Il ne reste que le dernier morceau, pas encore figé par la transcription en direct.
-        let rest = buffer.get(progress.at..).unwrap_or_default();
+        let rest = std::mem::take(&mut *shared.buffer.lock().map_err(|_| "Enregistrement illisible.")?);
+        let rest = rest.as_slice();
         let last = match prepare(rest, rate) {
             Some(audio) if rest.len() as f32 >= rate as f32 * 0.3 => {
                 let ctx = load_context(&app, &cache, recording.model)?;

@@ -19,6 +19,7 @@ import {
   Merge,
   MessageSquare,
   Mic,
+  MonitorSpeaker,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -227,7 +228,8 @@ export function BrainNotePage({
   })
   const dictating = dictation.phase !== 'idle'
 
-  function startDictation() {
+  /** source 'system' = transcrire le son du Mac (réunion, cours, vidéo…) dans la note. */
+  function startDictation(source: 'mic' | 'system' = 'mic') {
     const el = contentRef.current
     const content = draft.content
     const atCaret = editing && el !== null && contentTouched.current
@@ -237,7 +239,7 @@ export function BrainNotePage({
     dictationBase.current = { text: content, start, end, paragraph }
     flush() // ce qui a été tapé avant est enregistré tel quel
     setEditing(true)
-    void dictation.start()
+    void dictation.start(source)
   }
 
   // Dictée à la fin de la note : la page suit le texte qui s'écrit.
@@ -371,12 +373,25 @@ export function BrainNotePage({
             variant="ghost"
             size="icon"
             className="rounded-full"
-            onClick={startDictation}
+            onClick={() => startDictation()}
             disabled={dictating}
             aria-label="Dicter dans la note (transcrit sur ton Mac)"
             title="Dicter dans la note (transcrit sur ton Mac)"
           >
             <Mic aria-hidden />
+          </Button>
+        )}
+        {CAN_DICTATE && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full"
+            onClick={() => startDictation('system')}
+            disabled={dictating}
+            aria-label="Transcrire le son du Mac dans la note (réunion, cours, vidéo…)"
+            title="Transcrire le son du Mac dans la note (réunion, cours, vidéo…)"
+          >
+            <MonitorSpeaker aria-hidden />
           </Button>
         )}
 

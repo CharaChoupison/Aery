@@ -3,6 +3,14 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 /** true dans l'appli Tauri, false dans le navigateur (npm run dev). */
 export const IS_TAURI = isTauri()
 
+/** Version web servie par le serveur Aery (via Tailscale), pas le serveur de dev du Mac. */
+export const ON_SERVER = !IS_TAURI && typeof location !== 'undefined' && location.hostname.endsWith('.ts.net')
+
+/** Message quand la version web n'arrive pas à joindre son serveur (fetch qui échoue). */
+export const WEB_UNREACHABLE = ON_SERVER
+  ? 'Impossible de joindre le serveur Aery. Vérifie que Tailscale est connecté sur cet appareil.'
+  : 'Impossible de joindre le serveur local. Est-ce que `npm run dev` tourne ?'
+
 /** Événements envoyés par la partie Rust (src-tauri/src/proxy.rs). */
 type ProxyEvent =
   | { type: 'head'; status: number; headers: [string, string][] }

@@ -6,6 +6,7 @@ import {
   startDictation,
   stopDictation,
   useDictationModels,
+  type DictationSource,
 } from '@/lib/dictation'
 import { getPreferences } from '@/lib/preferences'
 
@@ -29,6 +30,7 @@ export function useDictation(onText: (text: string) => void) {
   const [error, setError] = useState<string | null>(null)
   const [noModel, setNoModel] = useState(false)
   const [startedAt, setStartedAt] = useState(0)
+  const [source, setSource] = useState<DictationSource>('mic')
   const { models } = useDictationModels()
 
   const [listeners] = useState(() => new Set<(level: number) => void>())
@@ -44,6 +46,7 @@ export function useDictation(onText: (text: string) => void) {
     phaseRef.current = next
     setPhase(next)
   }, [])
+  const sourceRef = useRef<DictationSource>('mic')
   const onTextRef = useRef(onText)
   useEffect(() => {
     onTextRef.current = onText
@@ -60,7 +63,13 @@ export function useDictation(onText: (text: string) => void) {
     try {
       const text = (await stopDictation()).trim()
       onTextRef.current(text)
-      if (!text) setError('Je n’ai rien entendu. Parle un peu plus près du micro et réessaie.')
+      if (!text) {
+        setError(
+          sourceRef.current === 'system'
+            ? 'Je n’ai rien entendu : aucune parole dans le son du Mac.'
+            : 'Je n’ai rien entendu. Parle un peu plus près du micro et réessaie.',
+        )
+      }
     } catch (e) {
       setError(String(e))
     } finally {
@@ -68,8 +77,11 @@ export function useDictation(onText: (text: string) => void) {
     }
   }, [go])
 
-  const start = useCallback(async () => {
+  /** source : 'mic' (dictée) ou 'system' (transcrire le son du Mac). */
+  const start = useCallback(async (from: DictationSource = 'mic') => {
     if (phaseRef.current !== 'idle') return
+    sourceRef.current = from
+    setSource(from)
     setError(null)
     setNoModel(false)
     const list = models ?? (await refreshDictationModels())
@@ -80,7 +92,7 @@ export function useDictation(onText: (text: string) => void) {
     }
     go('starting')
     try {
-      await startDictation(model, getPreferences().dictation.language, {
+      await startDictation(model, getPreferences().dictation.language, from, {
         onLevel: (level) => listeners.forEach((l) => l(level)),
         // Un passage en direct peut arriver juste après la fin : on ne garde que ceux d'avant.
         onPartial: (text) => phaseRef.current === 'recording' && onTextRef.current(text),
@@ -133,6 +145,8 @@ export function useDictation(onText: (text: string) => void) {
 
   return {
     phase,
+    /** Source de l'enregistrement en cours (ou du dernier). */
+    source,
     error,
     noModel,
     startedAt,

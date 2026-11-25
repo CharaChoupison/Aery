@@ -2,11 +2,12 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 import { defineConfig } from 'vite'
+import { serviceWorkerPlugin } from './pwa/plugin.ts'
 import { freellmPlugin } from './server/freellmPlugin.ts'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), freellmPlugin()],
+  plugins: [react(), tailwindcss(), freellmPlugin(), serviceWorkerPlugin()],
   resolve: { alias: { '@': path.resolve(import.meta.dirname, './src') } },
   // ⚠️ Sécurité : on écoute uniquement en local. Ne jamais mettre host: true / '0.0.0.0',
   // sinon n'importe qui sur ton réseau Wi-Fi pourrait utiliser ton chat (et tes quotas).

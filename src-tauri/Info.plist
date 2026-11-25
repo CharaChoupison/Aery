@@ -5,5 +5,8 @@
 	<!-- Fusionné par Tauri dans l'Info.plist de l'appli. Sans cette phrase, macOS bloque le micro. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Aery utilise le micro pour la dictée. Le son est transcrit sur ton Mac et n’est jamais envoyé sur Internet.</string>
+	<!-- Son du Mac (system_audio.rs) : sans cette phrase, macOS ne donne que du silence. -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Aery écoute le son de ton Mac (vidéo, réunion…) pour le transcrire. Tout reste sur ton Mac, rien n’est envoyé sur Internet.</string>
 </dict>
 </plist>

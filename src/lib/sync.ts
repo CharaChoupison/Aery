@@ -193,7 +193,11 @@ export function syncNow(force = false): Promise<void> {
       } else if (e instanceof SyncHttpError) {
         setStatus({ phase: 'error', message: e.message })
       } else {
-        setStatus({ phase: navigator.onLine ? 'error' : 'offline', message: navigator.onLine ? 'Serveur injoignable.' : null })
+        // Le serveur n'est joignable que via Tailscale : c'est la cause la plus probable.
+        setStatus({
+          phase: navigator.onLine ? 'error' : 'offline',
+          message: navigator.onLine ? 'serveur injoignable, vérifie que Tailscale est connecté' : null,
+        })
       }
     } finally {
       setStatus({ pending: (await readOutbox().catch(() => [])).length })

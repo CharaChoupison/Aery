@@ -130,15 +130,23 @@ export interface DictationHandlers {
   onLimit: () => void
 }
 
-/** Ouvre le micro. La transcription démarre en direct, dans la langue donnée. */
-export async function startDictation(model: DictationModelId, language: DictationLanguage, handlers: DictationHandlers): Promise<void> {
+/** D'où vient le son : le micro, ou le son du Mac (vidéo, réunion… tout ce qui sort des haut-parleurs). */
+export type DictationSource = 'mic' | 'system'
+
+/** Ouvre la source. La transcription démarre en direct, dans la langue donnée. */
+export async function startDictation(
+  model: DictationModelId,
+  language: DictationLanguage,
+  source: DictationSource,
+  handlers: DictationHandlers,
+): Promise<void> {
   const onEvent = new Channel<DictationEvent>()
   onEvent.onmessage = (event) => {
     if (event.type === 'level') handlers.onLevel(event.level)
     else if (event.type === 'partial') handlers.onPartial([event.committed, event.pending].filter(Boolean).join(' '))
     else handlers.onLimit()
   }
-  await invoke('start_dictation', { model, language, onEvent })
+  await invoke('start_dictation', { model, language, source, onEvent })
 }
 
 /** Coupe le micro et renvoie le texte complet (vide si rien n'a été dit). */

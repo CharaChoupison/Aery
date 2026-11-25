@@ -6,7 +6,7 @@
 import { hasImages, toContent, type Attachment } from './attachments'
 import { readSSE } from './sse'
 import { splitThinking } from './thinking'
-import { appFetch, invokeCommand, IS_TAURI } from './transport'
+import { appFetch, invokeCommand, IS_TAURI, WEB_UNREACHABLE } from './transport'
 
 export type Role = 'system' | 'user' | 'assistant'
 
@@ -77,9 +77,7 @@ async function safeFetch(path: string, init?: FetchInit): Promise<Response> {
     if (isAbortError(e)) throw e
     throw new ApiError(
       0,
-      IS_TAURI
-        ? `Erreur interne de l’appli : ${(e as Error).message}`
-        : 'Impossible de joindre le serveur local. Est-ce que `npm run dev` tourne ?',
+      IS_TAURI ? `Erreur interne de l’appli : ${(e as Error).message}` : WEB_UNREACHABLE,
     )
   }
   if (!res.ok) throw await toApiError(res)
@@ -106,7 +104,12 @@ export async function getSettings(): Promise<Settings> {
       throw new ApiError(500, (e as Error).message)
     }
   }
-  const res = await fetch('/api/settings')
+  let res: Response
+  try {
+    res = await fetch('/api/settings')
+  } catch {
+    throw new ApiError(0, WEB_UNREACHABLE) // serveur injoignable (Tailscale coupé, pas de réseau)
+  }
   if (!res.ok) throw await toApiError(res)
   return res.json()
 }
